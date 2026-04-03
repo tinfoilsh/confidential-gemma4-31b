@@ -1,0 +1,44 @@
+cvm-version: 0.7.3
+cpus: 16
+memory: 65536
+gpus: 1
+
+models:
+  - name: "gemma4-31b"
+    repo: "google/gemma-4-31B-it@419b2efe421994fdfd3394e621983d4cc511cd4f"
+    mpk: "REPLACE_WITH_MODELPACK_HASH"
+
+containers:
+  - name: "gemma4-31b"
+    image: "vllm/vllm-openai:gemma4-cu130@sha256:9f82491807fccb4c7a9e767cdf3c3648a80d98b4e7d345cfa011e8ddc5eb2098"
+    runtime: nvidia
+    gpus: all
+    ipc: host
+    # Replace REPLACE_WITH_MODELPACK_SHA256 with the first underscore-delimited
+    # segment from the final mpk value above.
+    command: [
+      "--model", "/tinfoil/mpk/mpk-REPLACE_WITH_MODELPACK_SHA256",
+      "--tensor-parallel-size", "1",
+      "--max-model-len", "262144",
+      "--gpu-memory-utilization", "0.95",
+      "--served-model-name", "gemma4-31b",
+      "--enable-auto-tool-choice",
+      "--tool-call-parser", "gemma4",
+      "--reasoning-parser", "gemma4",
+      "--async-scheduling",
+      "--port", "8001"
+    ]
+
+shim:
+  upstream-port: 8001
+  authenticated: true
+  authenticated-endpoints:
+    - /v1/chat/completions
+    - /v1/models
+    - /v1/responses
+  paths:
+    - /v1/chat/completions
+    - /v1/models
+    - /v1/responses
+    - /metrics
+    - /health
