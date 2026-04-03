@@ -6,7 +6,7 @@ gpus: 1
 models:
   - name: "gemma4-31b"
     repo: "google/gemma-4-31B-it@419b2efe421994fdfd3394e621983d4cc511cd4f"
-    mpk: "REPLACE_WITH_MODELPACK_HASH"
+    mpk: "0900ca6b913db0036792149d3ea5862986d66a6964b010e998f56fbb7e1276ab_62578683904_59fe9787-ed93-577a-9fd9-a7804c932a11"
 
 containers:
   - name: "gemma4-31b"
@@ -14,10 +14,8 @@ containers:
     runtime: nvidia
     gpus: all
     ipc: host
-    # Replace REPLACE_WITH_MODELPACK_SHA256 with the first underscore-delimited
-    # segment from the final mpk value above.
     command: [
-      "--model", "/tinfoil/mpk/mpk-REPLACE_WITH_MODELPACK_SHA256",
+      "--model", "/tinfoil/mpk/mpk-0900ca6b913db0036792149d3ea5862986d66a6964b010e998f56fbb7e1276ab",
       "--tensor-parallel-size", "1",
       "--max-model-len", "262144",
       "--gpu-memory-utilization", "0.95",
