@@ -1,4 +1,4 @@
-cvm-version: 0.7.3
+cvm-version: 0.7.5
 cpus: 16
 memory: 65536
 gpus: 1
@@ -27,6 +27,11 @@ containers:
       "--async-scheduling",
       "--port", "8001"
     ]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30m
 
 shim:
   upstream-port: 8001
