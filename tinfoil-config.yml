@@ -27,6 +27,7 @@ containers:
       "--async-scheduling",
       "--port", "8001"
     ]
+    restart: always
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8001/health"]
       interval: 30s
