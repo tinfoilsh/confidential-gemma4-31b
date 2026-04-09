@@ -39,7 +39,6 @@ shim:
   authenticated: true
   authenticated-endpoints:
     - /v1/chat/completions
-    - /v1/models
     - /v1/responses
   paths:
     - /v1/chat/completions
