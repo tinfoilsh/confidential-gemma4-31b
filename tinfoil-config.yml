@@ -10,7 +10,7 @@ models:
 
 containers:
   - name: "gemma4-31b"
-    image: "vllm/vllm-openai:gemma4-cu130@sha256:9f82491807fccb4c7a9e767cdf3c3648a80d98b4e7d345cfa011e8ddc5eb2098"
+    image: "vllm/vllm-openai:v0.19.1-cu130@sha256:2ccff44e7b60ed43093004af99b57ae49855c9d49c411c6707807a49a6eb0e8e"
     runtime: nvidia
     gpus: all
     ipc: host
