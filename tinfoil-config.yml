@@ -24,7 +24,7 @@ containers:
       "--reasoning-parser", "gemma4",
       "--limit-mm-per-prompt", "{\"image\": 4, \"audio\": 1, \"video\": 1}",
       "--chat-template", "examples/tool_chat_template_gemma4.jinja",
-      "--async-scheduling",
+      "--max-model-len", "81920",
       "--port", "8001"
     ]
     restart: always
