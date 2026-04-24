@@ -25,6 +25,7 @@ containers:
       "--limit-mm-per-prompt", "{\"image\": 4, \"audio\": 1, \"video\": 1}",
       "--chat-template", "examples/tool_chat_template_gemma4.jinja",
       "--scheduling-policy", "priority",
+      "--max-num-seqs", "32",
       "--port", "8001"
     ]
     restart: always
