@@ -1,0 +1,31 @@
+--- a/usr/local/lib/python3.12/dist-packages/vllm/v1/core/sched/scheduler.py
++++ b/usr/local/lib/python3.12/dist-packages/vllm/v1/core/sched/scheduler.py
+@@ -741,7 +741,13 @@
+                 ):
+                     if request.has_encoder_inputs:
+                         self.encoder_cache_manager.free(request)
+-                    break
++                    # Tinfoil patch (0001): skip this waiter instead of breaking
++                    # the entire admission loop. Matches the pop+skip+continue
++                    # pattern used by every other "can't schedule this one"
++                    # branch above. Upstream: vllm-project/vllm#39734.
++                    request_queue.pop_request()
++                    step_skipped_waiting.prepend_request(request)
++                    continue
+ 
+                 new_blocks = self.kv_cache_manager.allocate_slots(
+                     request,
+@@ -761,7 +767,12 @@
+                     # manager
+                     if request.has_encoder_inputs:
+                         self.encoder_cache_manager.free(request)
+-                    break
++                    # Tinfoil patch (0001): same reasoning as the previous
++                    # break site - skip this waiter rather than aborting the
++                    # loop. A smaller waiter behind this one may still fit.
++                    request_queue.pop_request()
++                    step_skipped_waiting.prepend_request(request)
++                    continue
+ 
+                 # KVTransfer: the connector uses this info to determine
+                 # if a load is needed. Note that

@@ -1,0 +1,199 @@
+--- a/usr/local/lib/python3.12/dist-packages/vllm/v1/core/sched/scheduler.py
++++ b/usr/local/lib/python3.12/dist-packages/vllm/v1/core/sched/scheduler.py
+@@ -233,6 +233,11 @@
+             pcp_world_size=self.pcp_world_size,
+             hash_block_size=self.block_size,
+             metrics_collector=self.kv_metrics_collector,
++            # Tinfoil patch (0002): threaded through so SlidingWindowManager
++            # can cap its admission-time block budgeting at
++            # sliding_window + max_num_batched_tokens instead of full ISL.
++            # Upstream: vllm-project/vllm#39866.
++            max_num_batched_tokens=self.scheduler_config.max_num_batched_tokens,
+         )
+         # Bind GPU block pool to the KV connector. This must happen after
+         # kv_cache_manager is constructed so block_pool is available.
+--- a/usr/local/lib/python3.12/dist-packages/vllm/v1/core/kv_cache_manager.py
++++ b/usr/local/lib/python3.12/dist-packages/vllm/v1/core/kv_cache_manager.py
+@@ -116,6 +116,8 @@
+         dcp_world_size: int = 1,
+         pcp_world_size: int = 1,
+         metrics_collector: KVCacheMetricsCollector | None = None,
++        # Tinfoil patch (0002): plumbed through to SlidingWindowManager.
++        max_num_batched_tokens: int | None = None,
+     ) -> None:
+         self.max_model_len = max_model_len
+ 
+@@ -138,6 +140,7 @@
+             pcp_world_size=pcp_world_size,
+             hash_block_size=hash_block_size,
+             metrics_collector=self.metrics_collector,
++            max_num_batched_tokens=max_num_batched_tokens,
+         )
+         self.num_kv_cache_groups = len(kv_cache_config.kv_cache_groups)
+         self.block_pool = self.coordinator.block_pool
+--- a/usr/local/lib/python3.12/dist-packages/vllm/v1/core/kv_cache_coordinator.py
++++ b/usr/local/lib/python3.12/dist-packages/vllm/v1/core/kv_cache_coordinator.py
+@@ -41,10 +41,14 @@
+         pcp_world_size: int,
+         hash_block_size: int,
+         metrics_collector: KVCacheMetricsCollector | None = None,
++        # Tinfoil patch (0002): plumbed through to SlidingWindowManager so it
++        # can cap its admission-time block budgeting. None = no cap.
++        max_num_batched_tokens: int | None = None,
+     ):
+         self.kv_cache_config = kv_cache_config
+         self.max_model_len = max_model_len
+         self.enable_caching = enable_caching
++        self.max_num_batched_tokens = max_num_batched_tokens
+ 
+         self.block_pool = BlockPool(
+             kv_cache_config.num_blocks,
+@@ -64,6 +68,9 @@
+                 kv_cache_group_id=i,
+                 dcp_world_size=dcp_world_size,
+                 pcp_world_size=pcp_world_size,
++                # Tinfoil patch (0002): forwarded to every manager; only
++                # SlidingWindowManager actually uses it today.
++                max_num_batched_tokens=max_num_batched_tokens,
+             )
+             for i, kv_cache_group in enumerate(self.kv_cache_config.kv_cache_groups)
+         )
+@@ -271,6 +278,8 @@
+         pcp_world_size: int,
+         hash_block_size: int,
+         metrics_collector: KVCacheMetricsCollector | None = None,
++        # Tinfoil patch (0002):
++        max_num_batched_tokens: int | None = None,
+     ):
+         super().__init__(
+             kv_cache_config,
+@@ -282,6 +291,7 @@
+             pcp_world_size=pcp_world_size,
+             hash_block_size=hash_block_size,
+             metrics_collector=metrics_collector,
++            max_num_batched_tokens=max_num_batched_tokens,
+         )
+         self.num_single_type_manager = len(self.single_type_managers)
+ 
+@@ -317,6 +327,8 @@
+         pcp_world_size: int,
+         hash_block_size: int,
+         metrics_collector: KVCacheMetricsCollector | None = None,
++        # Tinfoil patch (0002):
++        max_num_batched_tokens: int | None = None,
+     ):
+         super().__init__(
+             kv_cache_config,
+@@ -328,6 +340,7 @@
+             pcp_world_size=pcp_world_size,
+             hash_block_size=hash_block_size,
+             metrics_collector=metrics_collector,
++            max_num_batched_tokens=max_num_batched_tokens,
+         )
+         self.kv_cache_spec = self.kv_cache_config.kv_cache_groups[0].kv_cache_spec
+         self.block_size = self.kv_cache_spec.block_size
+@@ -382,6 +395,8 @@
+         pcp_world_size: int,
+         hash_block_size: int,
+         metrics_collector: KVCacheMetricsCollector | None = None,
++        # Tinfoil patch (0002):
++        max_num_batched_tokens: int | None = None,
+     ):
+         super().__init__(
+             kv_cache_config,
+@@ -393,6 +408,7 @@
+             pcp_world_size=pcp_world_size,
+             hash_block_size=hash_block_size,
+             metrics_collector=metrics_collector,
++            max_num_batched_tokens=max_num_batched_tokens,
+         )
+         # hash_block_size: the block size used to compute block hashes.
+         # The actual block size usually equals hash_block_size, but in cases where
+@@ -554,6 +570,8 @@
+     pcp_world_size: int,
+     hash_block_size: int,
+     metrics_collector: KVCacheMetricsCollector | None = None,
++    # Tinfoil patch (0002):
++    max_num_batched_tokens: int | None = None,
+ ) -> KVCacheCoordinator:
+     if not enable_caching:
+         return KVCacheCoordinatorNoPrefixCache(
+@@ -565,6 +583,7 @@
+             pcp_world_size=pcp_world_size,
+             hash_block_size=hash_block_size,
+             metrics_collector=metrics_collector,
++            max_num_batched_tokens=max_num_batched_tokens,
+         )
+     if len(kv_cache_config.kv_cache_groups) == 1:
+         return UnitaryKVCacheCoordinator(
+@@ -577,6 +596,7 @@
+             pcp_world_size=pcp_world_size,
+             hash_block_size=hash_block_size,
+             metrics_collector=metrics_collector,
++            max_num_batched_tokens=max_num_batched_tokens,
+         )
+     return HybridKVCacheCoordinator(
+         kv_cache_config,
+@@ -588,4 +608,5 @@
+         pcp_world_size=pcp_world_size,
+         hash_block_size=hash_block_size,
+         metrics_collector=metrics_collector,
++        max_num_batched_tokens=max_num_batched_tokens,
+     )
+--- a/usr/local/lib/python3.12/dist-packages/vllm/v1/core/single_type_kv_cache_manager.py
++++ b/usr/local/lib/python3.12/dist-packages/vllm/v1/core/single_type_kv_cache_manager.py
+@@ -39,6 +39,9 @@
+         kv_cache_group_id: int,
+         dcp_world_size: int = 1,
+         pcp_world_size: int = 1,
++        # Tinfoil patch (0002): plumbed through so SlidingWindowManager can
++        # cap its block-budget math. Other managers ignore it.
++        max_num_batched_tokens: int | None = None,
+     ) -> None:
+         """
+         Initializes the SingleTypeKVCacheManager.
+@@ -56,6 +59,7 @@
+         self.block_pool = block_pool
+         self.enable_caching = enable_caching
+         self.new_block_ids: list[int] = []
++        self.max_num_batched_tokens = max_num_batched_tokens
+ 
+         # Mapping from request ID to blocks to track the blocks allocated
+         # for each request, so that we can free the blocks when the request
+@@ -482,6 +486,36 @@
+         super().__init__(kv_cache_spec, **kwargs)
+         self.sliding_window = kv_cache_spec.sliding_window
+ 
++    # Tinfoil patch (0002): cap the effective num_tokens used for
++    # admission-time block budgeting at sliding_window + max_num_batched_tokens
++    # (the window is the steady-state cap; one prefill-chunk buffer covers the
++    # transient during chunked prefill before out-of-window blocks are freed
++    # by remove_skipped_blocks). Without this cap, SWA groups budget for the
++    # full input sequence length even though the layers can never hold more
++    # than `sliding_window` tokens' worth of KV at steady state.
++    # Upstream: vllm-project/vllm#39866.
++    def _cap_num_tokens(self, num_tokens: int) -> int:
++        if self.max_num_batched_tokens is None:
++            return num_tokens
++        cap = self.sliding_window + self.max_num_batched_tokens
++        return min(num_tokens, cap)
++
++    def get_num_blocks_to_allocate(
++        self,
++        request_id: str,
++        num_tokens: int,
++        new_computed_blocks: Sequence[KVCacheBlock],
++        total_computed_tokens: int,
++        num_tokens_main_model: int,
++    ) -> int:
++        return super().get_num_blocks_to_allocate(
++            request_id,
++            self._cap_num_tokens(num_tokens),
++            new_computed_blocks,
++            total_computed_tokens,
++            self._cap_num_tokens(num_tokens_main_model),
++        )
++
+     @classmethod
+     def find_longest_cache_hit(
+         cls,
