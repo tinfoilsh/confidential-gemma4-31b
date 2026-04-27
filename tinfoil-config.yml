@@ -24,7 +24,6 @@ containers:
       "--reasoning-parser", "gemma4",
       "--limit-mm-per-prompt", "{\"image\": 4, \"audio\": 0, \"video\": 0}",
       "--chat-template", "examples/tool_chat_template_gemma4.jinja",
-      "--default-chat-template-kwargs", "{\"enable_thinking\": true}",
       "--scheduling-policy", "priority",
       "--max-num-seqs", "32",
       "--port", "8001"
