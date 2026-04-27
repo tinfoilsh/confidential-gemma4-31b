@@ -5,8 +5,8 @@ gpus: 1
 
 models:
   - name: "gemma4-31b"
-    repo: "google/gemma-4-31B-it@419b2efe421994fdfd3394e621983d4cc511cd4f"
-    mpk: "0900ca6b913db0036792149d3ea5862986d66a6964b010e998f56fbb7e1276ab_62578683904_59fe9787-ed93-577a-9fd9-a7804c932a11"
+    repo: "google/gemma-4-31B-it@439edf5652646a0d1bd8b46bfdc1d3645761a445"
+    mpk: "718354742d7b263c729ea11fbef3e744d61815c5b05043eea6ba0dd3ee44ea01_62578688000_27fb23ac-db9b-5e25-991a-90fdf2c9b3a7"
 
 containers:
   - name: "gemma4-31b"
@@ -15,15 +15,16 @@ containers:
     gpus: all
     ipc: host
     command: [
-      "--model", "/tinfoil/mpk/mpk-0900ca6b913db0036792149d3ea5862986d66a6964b010e998f56fbb7e1276ab",
+      "--model", "/tinfoil/mpk/mpk-718354742d7b263c729ea11fbef3e744d61815c5b05043eea6ba0dd3ee44ea01",
       "--tensor-parallel-size", "1",
       "--gpu-memory-utilization", "0.95",
       "--served-model-name", "gemma4-31b",
       "--enable-auto-tool-choice",
       "--tool-call-parser", "gemma4",
       "--reasoning-parser", "gemma4",
-      "--limit-mm-per-prompt", "{\"image\": 4, \"audio\": 1, \"video\": 1}",
+      "--limit-mm-per-prompt", "{\"image\": 4, \"audio\": 0, \"video\": 0}",
       "--chat-template", "examples/tool_chat_template_gemma4.jinja",
+      "--default-chat-template-kwargs", "{\"enable_thinking\": true}",
       "--scheduling-policy", "priority",
       "--max-num-seqs", "32",
       "--port", "8001"
