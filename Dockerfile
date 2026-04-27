@@ -2,7 +2,7 @@
 #
 # Patched vLLM image. Base is digest-pinned for attestation. See patches/
 # for the diff set and README.md for the patching playbook.
-ARG VLLM_BASE_IMAGE=vllm/vllm-openai:v0.19.1-cu130@sha256:2ccff44e7b60ed43093004af99b57ae49855c9d49c411c6707807a49a6eb0e8e
+ARG VLLM_BASE_IMAGE=vllm/vllm-openai:v0.20.0-cu130@sha256:328268a8e0ceb9fccd301cca6599654908c3cac0e328ddce953c933b432924ef
 FROM ${VLLM_BASE_IMAGE}
 
 # Patches are -p1 unified diffs rooted at /; they target
