@@ -6,7 +6,7 @@ Applied in filename order at build time.
 ## Rules
 
 - Diffs are `-p1` rooted at `/`, so paths start with
-  `usr/local/lib/python3.12/dist-packages/...`
+  `usr/local/lib/python3.12/site-packages/...`
 - Each patch is one reviewable change with a prefixed number
   (`NNNN-short-slug.patch`)
 - Each patch includes an in-code comment citing the upstream issue/PR so
@@ -18,10 +18,10 @@ Applied in filename order at build time.
 F=vllm/v1/core/sched/scheduler.py      # file to patch (relative to vllm/)
 BASE=$(sed -n 's/^ARG VLLM_BASE_IMAGE=//p' ../Dockerfile)
 
-docker run --rm "$BASE" cat "/usr/local/lib/python3.12/dist-packages/$F" > orig
+docker run --rm "$BASE" cat "/usr/local/lib/python3.12/site-packages/$F" > orig
 cp orig patched && $EDITOR patched
-diff -u --label "a/usr/local/lib/python3.12/dist-packages/$F" \
-        --label "b/usr/local/lib/python3.12/dist-packages/$F" \
+diff -u --label "a/usr/local/lib/python3.12/site-packages/$F" \
+        --label "b/usr/local/lib/python3.12/site-packages/$F" \
         orig patched > NNNN-slug.patch
 docker build ..                        # must succeed
 ```

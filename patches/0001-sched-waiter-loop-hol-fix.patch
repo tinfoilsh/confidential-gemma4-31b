@@ -1,5 +1,5 @@
---- a/usr/local/lib/python3.12/dist-packages/vllm/v1/core/sched/scheduler.py
-+++ b/usr/local/lib/python3.12/dist-packages/vllm/v1/core/sched/scheduler.py
+--- a/usr/local/lib/python3.12/site-packages/vllm/v1/core/sched/scheduler.py
++++ b/usr/local/lib/python3.12/site-packages/vllm/v1/core/sched/scheduler.py
 @@ -741,7 +741,13 @@
                  ):
                      if request.has_encoder_inputs:
