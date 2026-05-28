@@ -6,7 +6,7 @@ ARG VLLM_BASE_IMAGE=vllm/vllm-openai:v0.21.0@sha256:a230095847e93bd4df9888b33dab
 FROM ${VLLM_BASE_IMAGE}
 
 # Patches are -p1 unified diffs rooted at /; they target
-# usr/local/lib/python3.12/site-packages/... to match the base image.
+# usr/local/lib/python3.12/dist-packages/... to match the base image.
 COPY patches/ /tmp/tinfoil-patches/
 RUN set -eux; \
     test -x /usr/bin/patch; \
@@ -15,6 +15,6 @@ RUN set -eux; \
         echo "Applying $(basename "$p")"; \
         /usr/bin/patch -p1 --no-backup-if-mismatch --fuzz=0 < "$p"; \
     done; \
-    find /usr/local/lib/python3.12/site-packages/vllm -name '__pycache__' -type d -exec rm -rf {} + || true; \
+    find /usr/local/lib/python3.12/dist-packages/vllm -name '__pycache__' -type d -exec rm -rf {} + || true; \
     rm -rf /tmp/tinfoil-patches; \
     python3 -c "import vllm; print('vllm', vllm.__version__, 'with tinfoil patches')"
