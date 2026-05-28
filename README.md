@@ -9,7 +9,6 @@ Tinfoil confidential enclave configuration for
 confidential-gemma4-31b/
 ├── Dockerfile                 builds on the pinned vllm/vllm-openai base
 ├── patches/                   unified-diff patches applied at build time
-│   ├── 0001-sched-waiter-loop-hol-fix.patch
 │   ├── 0004-auto-enable-repetition-detection-structured-output.patch
 │   └── README.md              how to add / update patches
 ├── tinfoil-config.yml         enclave configuration
