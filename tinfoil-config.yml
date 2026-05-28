@@ -4,7 +4,7 @@ memory: 65536
 gpus: 1
 
 models:
-  - name: "gemma-4-31b-it"
+  - name: "gemma-4-31b"
     repo: "google/gemma-4-31B-it@fb9ae262347c3945692f09a612f8bb189def854f"
     mpk: "d2f38032f5faaa8a45b433157d0f25da1e533cf233784c7438fe9f46d1fbc3f4_62578688000_421c697b-8a62-59e2-9085-819a35012c0b"
 
