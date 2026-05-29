@@ -1,0 +1,20 @@
+--- a/vllm-workspace/examples/tool_chat_template_gemma4.jinja
++++ b/vllm-workspace/examples/tool_chat_template_gemma4.jinja
+@@ -295,6 +295,17 @@
+                                 {%- endif -%}
+                             {%- endfor -%}
+                             {{- format_tool_response_block(ns_tname.name, ns_txt.s) -}}
++                            {#- Tinfoil patch (0005): cherry-pick of vllm-project/vllm#41459.
++                                Remove once the base vLLM image includes that merged PR; it is not in v0.21.0. -#}
++                            {%- for part in tool_body -%}
++                                {%- if part.get('type') == 'image' -%}
++                                    {{- '<|image|>' -}}
++                                {%- elif part.get('type') == 'audio' -%}
++                                    {{- '<|audio|>' -}}
++                                {%- elif part.get('type') == 'video' -%}
++                                    {{- '<|video|>' -}}
++                                {%- endif -%}
++                            {%- endfor -%}
+                         {%- else -%}
+                             {{- format_tool_response_block(ns_tname.name, tool_body) -}}
+                         {%- endif -%}
