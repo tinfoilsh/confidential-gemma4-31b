@@ -10,7 +10,7 @@ models:
 
 containers:
   - name: "gemma4-31b"
-    image: "ghcr.io/tinfoilsh/confidential-gemma4-31b@sha256:0000000000000000000000000000000000000000000000000000000000000000" # placeholder - populated during release
+    image: "ghcr.io/tinfoilsh/confidential-gemma4-31b@sha256:149806fdf6a375ee80322c8d9a32cdba4c018f782866d78580491a4292d8ffb2" # v0.0.15
     runtime: nvidia
     gpus: all
     ipc: host
