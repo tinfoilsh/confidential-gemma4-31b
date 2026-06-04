@@ -5,7 +5,7 @@
                              {%- endfor -%}
                              {{- format_tool_response_block(ns_tname.name, ns_txt.s) -}}
 +                            {#- Tinfoil patch (0005): cherry-pick of vllm-project/vllm#41459.
-+                                Remove once the base vLLM image includes that merged PR; it is not in v0.21.0. -#}
++                                Remove once the base vLLM image includes that merged PR; it is not in v0.22.0. -#}
 +                            {%- for part in tool_body -%}
 +                                {%- if part.get('type') == 'image' -%}
 +                                    {{- '<|image|>' -}}

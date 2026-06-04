@@ -1,4 +1,4 @@
-cvm-version: 0.7.5
+cvm-version: 0.10.2
 cpus: 16
 memory: 65536
 gpus: 1
@@ -14,6 +14,11 @@ containers:
     runtime: nvidia
     gpus: all
     ipc: host
+    read_only: false
+    cap_add:
+      - IPC_LOCK
+      - SYS_RESOURCE
+      - SYS_NICE
     command: [
       "--model", "/tinfoil/mpk/mpk-d2f38032f5faaa8a45b433157d0f25da1e533cf233784c7438fe9f46d1fbc3f4",
       "--tensor-parallel-size", "1",
@@ -33,6 +38,9 @@ containers:
       interval: 30s
       timeout: 5s
       start_period: 30m
+    tmpfs:
+      /tmp: size=512m,mode=1777,exec
+      /root: size=2g,mode=0700,exec
 
 shim:
   upstream-port: 8001
