@@ -1,4 +1,4 @@
-cvm-version: 0.10.4
+cvm-version: 0.10.8
 cpus: 16
 memory: 65536
 gpus: 1
