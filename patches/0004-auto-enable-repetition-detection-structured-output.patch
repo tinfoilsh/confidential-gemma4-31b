@@ -1,6 +1,6 @@
 --- a/usr/local/lib/python3.12/dist-packages/vllm/sampling_params.py
 +++ b/usr/local/lib/python3.12/dist-packages/vllm/sampling_params.py
-@@ -106,6 +106,17 @@
+@@ -141,6 +141,17 @@
              )
          )
  
@@ -18,7 +18,7 @@
  
  @dataclass
  class RepetitionDetectionParams:
-@@ -418,6 +429,30 @@
+@@ -478,6 +489,30 @@
          # eos_token_id is added to this by the engine
          self._all_stop_token_ids.update(self.stop_token_ids)
  
