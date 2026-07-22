@@ -25,9 +25,9 @@ RUN python3 - <<'PY'
 import inspect
 
 import vllm
-from vllm.v1.worker import gpu_model_runner
+from vllm.v1.worker import block_table, gpu_model_runner
 
-source = inspect.getsource(gpu_model_runner)
+source = inspect.getsource(gpu_model_runner) + inspect.getsource(block_table)
 required = (
     "VLLM_CC_OUTPUT_WORKER",
     "VLLM_CC_SPEC_COUNT_FAST_PUBLICATION",
