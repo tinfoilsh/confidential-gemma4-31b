@@ -18,7 +18,6 @@ containers:
     gpus: all
     restart: always
     env:
-      - PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
       - VLLM_CC_PAGEABLE_H2D: "1"
       - VLLM_CC_OUTPUT_WORKER: "1"
       - VLLM_CC_SPEC_COUNT_FAST_PUBLICATION: "1"
