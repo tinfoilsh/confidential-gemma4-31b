@@ -1,61 +1,42 @@
-# vLLM Deployment Patches
+# vLLM v0.25.1 Deployment Patches
 
-Patches apply in filename order to the installed vLLM package. They use
-source-root paths (`a/vllm/...`) and are applied from the package's parent
-directory with `patch -p1 --fuzz=0`.
+These four patches apply in filename order to the official vLLM v0.25.1
+Python package. They were generated from
+`tinfoilsh/vllm-cc-opt:milestone/gemma4-cc-v0251-b300-20260722` at commit
+`1fe696063298233e75a60728db50ff4c8e4c734c`.
 
-## Patch Groups
+## Included
 
-- `0001-auto-enable-repetition-detection-structured-output.patch` is the
-  existing Gemma 4 structured-output workaround, rebased onto v0.23.0.
-- `0101` through `0113` are runtime-only exports of the preserved 13-commit
-  handoff stack.
-- `0114` coalesces overlapping dirty block-table writes before the Triton
-  update kernel. It is the first takeover fix and has passed full-CC validation
-  on an NVIDIA B300.
-- `0115` validates dirty-update bounds and rejects malformed negative sampled
-  token IDs.
-- `0116` through `0118` backport the official fixes for
-  `GHSA-8wr5-jm2h-8r4f`, `GHSA-rwxx-mrjm-wc2m`, and
-  `GHSA-33cg-gxv8-3p8g` from vLLM 0.24.0.
-- `0119` lets public deployments reject user-provided regex constraints
-  entirely, in addition to the upstream compilation timeout.
-- `0120` preserves the completed call's final argument delta when Gemma 4 emits
-  a tool-call end marker and the next start marker in one streaming chunk.
+- `0101` avoids CPU output-token history for requests that merely configure a
+  reasoning parser. v0.25.1 already creates the history on demand, but the
+  runner otherwise forces it on for every reasoning-enabled request.
+- `0102` allows this public deployment to reject user-provided regex
+  constraints. The upstream compilation timeout remains in place.
+- `0103` centralizes the pageable-host-staging policy at v0.25.1's global
+  `PIN_MEMORY` hook. `VLLM_CC_PAGEABLE_H2D=1` avoids pinned staging in full CC.
+- `0104` enables vLLM's repetition detector for grammar-constrained Gemma
+  output while preserving an explicit all-zero caller opt-out.
 
-The hardened takeover candidate is commit `d703207b4`, based on preserved
-handoff commit `52b60ccc7c48b5a36791036fbacd1bcc1911ca8f` and vLLM v0.23.0 commit
-`0fc695fc6d1d82e9a5ac6835ac8e4e1c83703665`.
+## Removed From v0.23.0
 
-## Gate Status
+The v0.23.0 output-publication worker, accepted-count publication, token-history
+plumbing, MTP stale-count fixes, Gemma streaming parser patch, and three
+security backports are not carried forward. v0.25.1 contains native async
+output/MTP implementations, the corresponding correctness fixes, a replacement
+Gemma parser, and the upstream security fixes.
 
-The deployment configuration enables all five gates, including
-`VLLM_CC_BLOCK_TABLE_DIRTY_UPDATE`. The preserved handoff image failed all
-seven API cases across 70 requests with that gate enabled. Candidate
-`f49f4a1c5` passed the same 70-request sequence, a 140-request concurrent
-oracle comparison, and a 70-request no-MTP control. Raw evidence is in the
-private `tinfoilsh/vllm-cc-gemma4-lab` repository.
+The custom uniform-decode metadata and dirty block-table kernels are also
+excluded from the minimal candidate. They will only be ported if matched
+full-CC measurements show a remaining regression that cannot be recovered by
+the smaller patch set.
 
-The security additions require a new image and full-CC regression run. The
-functional results below apply to `f49f4a1c5`; they are the comparison baseline,
-not a security sign-off for `d703207b4`.
+## Verification
 
-## Regenerating 0101-0120
-
-From the preserved vLLM checkout:
+Run:
 
 ```bash
-git format-patch \
-  --no-signature \
-  --keep-subject \
-  --start-number=101 \
-  --output-directory /path/to/confidential-gemma4-31b/patches \
-  v0.23.0..d703207b4 -- vllm
+validation/verify_patch_series.sh /path/to/vllm-checkout
 ```
 
-The `-- vllm` path restriction intentionally excludes upstream tests from the
-runtime image patch set. The complete patches, including tests, are preserved
-in `vllm-cc-gemma4-lab`.
-
-Run `validation/verify_patch_series.sh /path/to/vllm-checkout` after any patch
-change. A Docker build must also pass before release.
+The script checks out v0.25.1, applies all four patches with zero fuzz, and
+diffs the result against the source branch commit above.

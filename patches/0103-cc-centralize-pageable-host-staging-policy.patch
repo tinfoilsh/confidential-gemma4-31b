@@ -1,0 +1,133 @@
+From 09b7ec8071e26d6c40f75671defeb0f14492d4f3 Mon Sep 17 00:00:00 2001
+From: Jules Drean <jules@tinfoil.sh>
+Date: Wed, 22 Jul 2026 19:14:02 +0000
+Subject: cc: centralize pageable host staging policy
+
+---
+ vllm/platforms/cuda.py       | 27 +++++++++++++++++++++++++++
+ vllm/platforms/interface.py  |  5 +++++
+ vllm/utils/platform_utils.py | 20 ++++++++++++++++++++
+ vllm/utils/torch_utils.py    |  4 ++--
+ 4 files changed, 54 insertions(+), 2 deletions(-)
+
+diff --git a/vllm/platforms/cuda.py b/vllm/platforms/cuda.py
+index 605650525..3c218a7fa 100644
+--- a/vllm/platforms/cuda.py
++++ b/vllm/platforms/cuda.py
+@@ -186,6 +186,29 @@ def with_nvml_context(fn: Callable[_P, _R]) -> Callable[_P, _R]:
+     return wrapper
+ 
+ 
++@cache
++@with_nvml_context
++def confidential_compute_enabled() -> bool:
++    """Query NVML for the system confidential-compute state."""
++    from ctypes import byref
++
++    try:
++        settings = pynvml.c_nvmlSystemConfComputeSettings_v1_t()
++        ret = pynvml.nvmlSystemGetConfComputeSettings(byref(settings))
++        pynvml._nvmlCheckReturn(ret)
++        return (
++            settings.ccFeature == pynvml.NVML_CC_SYSTEM_FEATURE_ENABLED
++            or settings.multiGpuMode != pynvml.NVML_CC_SYSTEM_MULTIGPU_NONE
++        )
++    except (AttributeError, pynvml.NVMLError):
++        try:
++            state = pynvml.nvmlSystemGetConfComputeState()
++            return state.ccFeature == pynvml.NVML_CC_SYSTEM_FEATURE_ENABLED
++        except (AttributeError, pynvml.NVMLError) as exc:
++            logger.warning("Could not query confidential compute state: %s", exc)
++            return False
++
++
+ @cache
+ def _get_wsl_kernel_version() -> tuple[int, ...] | None:
+     """Return the WSL2 kernel version as a tuple, or None on parse failure.
+@@ -252,6 +275,10 @@ class CudaPlatformBase(Platform):
+     def manual_seed_all(cls, seed: int) -> None:
+         torch.cuda.manual_seed_all(seed)
+ 
++    @classmethod
++    def is_confidential_compute_enabled(cls) -> bool:
++        return confidential_compute_enabled()
++
+     @classmethod
+     def get_device_capability(cls, device_id: int = 0) -> DeviceCapability | None:
+         raise NotImplementedError
+diff --git a/vllm/platforms/interface.py b/vllm/platforms/interface.py
+index a81c34d7a..63a09076a 100644
+--- a/vllm/platforms/interface.py
++++ b/vllm/platforms/interface.py
+@@ -983,6 +983,11 @@ class Platform:
+             return False
+         return True
+ 
++    @classmethod
++    def is_confidential_compute_enabled(cls) -> bool:
++        """Whether the accelerator is operating in confidential-compute mode."""
++        return False
++
+     @classmethod
+     def get_current_memory_usage(
+         cls, device: torch.types.Device | None = None
+diff --git a/vllm/utils/platform_utils.py b/vllm/utils/platform_utils.py
+index cc69d9a24..49620e834 100644
+--- a/vllm/utils/platform_utils.py
++++ b/vllm/utils/platform_utils.py
+@@ -2,6 +2,7 @@
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+ 
+ import multiprocessing
++import os
+ from collections.abc import Sequence
+ from concurrent.futures.process import ProcessPoolExecutor
+ from functools import cache
+@@ -46,6 +47,25 @@ def is_pin_memory_available() -> bool:
+     return current_platform.is_pin_memory_available()
+ 
+ 
++@cache
++def prefer_pinned() -> bool:
++    """Return whether discretionary host staging should use pinned memory.
++
++    GPU confidential computing sends host transfers through an encrypted bounce
++    path, so pinning small staging buffers adds overhead without enabling the
++    usual direct asynchronous DMA. The explicit gate also makes A/B runs
++    deterministic when NVML state discovery is unavailable.
++    """
++    if os.environ.get("VLLM_CC_PAGEABLE_H2D", "0") == "1":
++        return False
++    if not is_pin_memory_available():
++        return False
++
++    from vllm.platforms import current_platform
++
++    return not current_platform.is_confidential_compute_enabled()
++
++
+ @cache
+ def is_uva_available() -> bool:
+     """Check if Unified Virtual Addressing (UVA) is available."""
+diff --git a/vllm/utils/torch_utils.py b/vllm/utils/torch_utils.py
+index cf821a54b..094f89525 100644
+--- a/vllm/utils/torch_utils.py
++++ b/vllm/utils/torch_utils.py
+@@ -17,7 +17,7 @@ from torch.library import Library, infer_schema
+ 
+ import vllm.envs as envs
+ from vllm.logger import init_logger
+-from vllm.utils.platform_utils import is_pin_memory_available
++from vllm.utils.platform_utils import prefer_pinned
+ 
+ if TYPE_CHECKING:
+     from vllm.config import ModelConfig
+@@ -69,7 +69,7 @@ MODELOPT_TO_VLLM_KV_CACHE_DTYPE_MAP = {
+ T = TypeVar("T")
+ 
+ 
+-PIN_MEMORY = is_pin_memory_available()
++PIN_MEMORY = prefer_pinned()
+ 
+ 
+ def is_quantized_kv_cache(kv_cache_dtype: str) -> bool:

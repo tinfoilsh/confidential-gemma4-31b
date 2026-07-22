@@ -1,4 +1,4 @@
-From 541da8feb846a19dc8ce7f107b12154a9bdf8602 Mon Sep 17 00:00:00 2001
+From 1444212b15fc1346870c3465663ea8da56557986 Mon Sep 17 00:00:00 2001
 From: Jules Drean <jules@tinfoil.sh>
 Date: Tue, 23 Jun 2026 15:44:03 -0400
 Subject: cc: avoid reasoning parser token history copies
@@ -8,10 +8,10 @@ Subject: cc: avoid reasoning parser token history copies
  1 file changed, 6 insertions(+), 5 deletions(-)
 
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index 86681f768..1bd472c2b 100644
+index e9b23f1c6..db6c2fe34 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
-@@ -676,11 +676,12 @@ class GPUModelRunner(
+@@ -702,11 +702,12 @@ class GPUModelRunner(
                  custom_logitsprocs,
              ),
              # We currently don't know whether a particular custom logits processor

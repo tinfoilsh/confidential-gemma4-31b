@@ -19,6 +19,9 @@ containers:
     restart: always
     env:
       - PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
+      - VLLM_CC_PAGEABLE_H2D: "1"
+      # Public regex constraints are disabled; JSON schema/choice remain available.
+      - VLLM_DISABLE_STRUCTURED_OUTPUT_REGEX: "1"
     command: ["--model", "/tinfoil/mpk/mpk-cda2f261f72d80a847eb6fabea1f9949bf14ce5bb323808a8e2e4a9f09018357","--tensor-parallel-size",
       "1", "--gpu-memory-utilization", "0.90", "--served-model-name", "gemma4-31b", "--enable-auto-tool-choice", "--enable-prompt-tokens-details", "--tool-call-parser",
       "gemma4", "--reasoning-parser", "gemma4", "--chat-template", "examples/tool_chat_template_gemma4.jinja", "--scheduling-policy",

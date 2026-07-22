@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.6
 #
-# Stock vLLM v0.25.1 control. The amd64 base is digest-pinned so the full-CC
-# comparison can be reproduced independently of mutable registry tags.
+# Minimal CC-aware vLLM v0.25.1 candidate. The amd64 base is digest-pinned so
+# the full-CC comparison can be reproduced independently of mutable tags.
 ARG VLLM_BASE_IMAGE=vllm/vllm-openai:v0.25.1@sha256:f0b9a0dc75a9fca3b6811e3279367b2d6a448055a000bfd13859587d74cef268
 FROM ${VLLM_BASE_IMAGE}
 
@@ -40,7 +40,19 @@ RUN set -eux; \
         openssl=3.0.2-0ubuntu1.25; \
     rm -rf /var/lib/apt/lists/*
 
-RUN python3 -c "import vllm; assert vllm.__version__.startswith('0.25.1'), vllm.__version__; print('stock vllm', vllm.__version__)"
+COPY patches/ /tmp/tinfoil-patches/
+RUN set -eux; \
+    test -x /usr/bin/patch; \
+    VLLM_PACKAGE_ROOT="$(python3 -c 'import pathlib, vllm; print(pathlib.Path(vllm.__file__).resolve().parent)')"; \
+    VLLM_SITE_ROOT="$(dirname "$VLLM_PACKAGE_ROOT")"; \
+    cd "$VLLM_SITE_ROOT"; \
+    for p in /tmp/tinfoil-patches/*.patch; do \
+        echo "Applying $(basename "$p")"; \
+        /usr/bin/patch -p1 --no-backup-if-mismatch --fuzz=0 < "$p"; \
+    done; \
+    find "$VLLM_PACKAGE_ROOT" -name '__pycache__' -type d -exec rm -rf {} + || true; \
+    rm -rf /tmp/tinfoil-patches; \
+    python3 -c "import vllm; assert vllm.__version__.startswith('0.25.1'), vllm.__version__; print('vllm', vllm.__version__, 'with minimal CC patches')"
 
 # Gemma 4 video decoding reaches FFmpeg through OpenCV. The newest compatible
 # OpenCV wheel does not yet contain FFmpeg 8.1.2, so video is disabled in the
@@ -70,7 +82,42 @@ assert importlib.util.find_spec("cv2") is None
 assert importlib.util.find_spec("mooncake") is None
 PY
 
+RUN python3 - <<'PY'
+import inspect
+
+from vllm import envs, sampling_params
+from vllm.platforms import cuda, interface
+from vllm.utils import platform_utils, torch_utils
+from vllm.v1.worker import gpu_model_runner
+
+source = "\n".join(
+    inspect.getsource(module)
+    for module in (
+        envs,
+        sampling_params,
+        cuda,
+        interface,
+        platform_utils,
+        torch_utils,
+        gpu_model_runner,
+    )
+)
+required = (
+    "VLLM_CC_PAGEABLE_H2D",
+    "prefer_pinned",
+    "is_confidential_compute_enabled",
+    "VLLM_DISABLE_STRUCTURED_OUTPUT_REGEX",
+    "uses_grammar_constraint",
+    "logitsprocs_need_output_token_ids=bool(custom_logitsprocs)",
+)
+missing = [marker for marker in required if marker not in source]
+if missing:
+    raise SystemExit(f"missing v0.25.1 CC patch markers: {missing}")
+
+print("verified minimal v0.25.1 CC patch set")
+PY
+
 LABEL org.opencontainers.image.source="https://github.com/tinfoilsh/confidential-gemma4-31b" \
       org.opencontainers.image.revision="${SOURCE_REVISION}" \
-      com.tinfoil.vllm.runtime-revision="752a3a504485790a2e8491cacbb35c137339ad34" \
-      com.tinfoil.vllm.variant="stock-v0.25.1-control"
+      com.tinfoil.vllm.runtime-revision="1fe696063298233e75a60728db50ff4c8e4c734c" \
+      com.tinfoil.vllm.variant="minimal-cc-v0.25.1"
