@@ -1,14 +1,14 @@
-From f49f4a1c5e3ca84378041f38f4a15090dce55b2c Mon Sep 17 00:00:00 2001
+From 6c609d5b64ed8e29e009741608684aec17780dbb Mon Sep 17 00:00:00 2001
 From: Jules Drean <jules@tinfoil.sh>
 Date: Wed, 22 Jul 2026 04:12:27 +0000
-Subject: fix: coalesce overlapping block-table dirty updates
+Subject: [PATCH 116/117] fix: coalesce overlapping block-table dirty updates
 
 ---
  vllm/v1/worker/block_table.py | 72 +++++++++++++++++++++++++++++++----
  1 file changed, 64 insertions(+), 8 deletions(-)
 
 diff --git a/vllm/v1/worker/block_table.py b/vllm/v1/worker/block_table.py
-index 948a697d9..f678dfcc6 100644
+index 97743af99..f31005985 100644
 --- a/vllm/v1/worker/block_table.py
 +++ b/vllm/v1/worker/block_table.py
 @@ -224,10 +224,13 @@ class BlockTable:
@@ -132,4 +132,6 @@ index 948a697d9..f678dfcc6 100644
                  "num_values": n_values,
                  "packed_bytes": packed_len * 4,
                  "full_copy_bytes_avoided": max(0, (full_copy_elems - packed_len) * 4),
+-- 
+2.43.0
 

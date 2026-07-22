@@ -1,8 +1,8 @@
 # Validation
 
-`verify_patch_series.sh` checks the deployment patches against an exact vLLM
-v0.23.0 checkout and compares the resulting runtime package to the preserved
-candidate.
+`verify_patch_series.sh` applies the deployment patches to exact vLLM v0.25.1
+and compares the runtime package to source commit
+`f7ccdd0596cb6899bc0b32a1ca581d9f67250db7`.
 
 `validate_stock_candidate_cc.py` runs the deterministic seven-case API suite
 against stock and candidate endpoints. Run it inside the benchmark environment
@@ -24,6 +24,9 @@ disjoint and reproduce the final authoritative CPU block table.
 expects regex constraints, remote and local-file media, video, and negative
 prompt token IDs to be rejected; checks inline image handling; churns canceled
 streams; and verifies health and canary isolation afterward.
+
+`validate_responses_endpoint.py` covers streamed text, forced and parallel
+streamed tools, function-result continuation, and streamed inline-image input.
 
 Correctness results must be preserved in `vllm-cc-gemma4-lab`, not committed
 to this deployment repository.

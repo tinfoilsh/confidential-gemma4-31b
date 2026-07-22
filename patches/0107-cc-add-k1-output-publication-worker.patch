@@ -1,14 +1,14 @@
-From 93110c32339d05e92e13f87d08862602205412ac Mon Sep 17 00:00:00 2001
+From 11d46b60207a097d64757dd1fda4e4ff3c7e456a Mon Sep 17 00:00:00 2001
 From: Jules Drean <jules@tinfoil.sh>
 Date: Tue, 23 Jun 2026 16:56:15 -0400
-Subject: cc: add k1 output publication worker
+Subject: [PATCH 107/117] cc: add k1 output publication worker
 
 ---
- vllm/v1/worker/gpu_model_runner.py | 286 +++++++++++++++++++++++++++--
- 1 file changed, 268 insertions(+), 18 deletions(-)
+ vllm/v1/worker/gpu_model_runner.py | 290 +++++++++++++++++++++++++++--
+ 1 file changed, 271 insertions(+), 19 deletions(-)
 
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index c97394845..1ef9c2a0b 100644
+index feaca12eb..1211eec58 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
 @@ -5,6 +5,7 @@ import functools
@@ -19,7 +19,7 @@ index c97394845..1ef9c2a0b 100644
  import threading
  import time
  from collections import defaultdict
-@@ -317,6 +318,208 @@ class AsyncGPUModelRunnerOutput(AsyncModelRunnerOutput):
+@@ -338,6 +339,208 @@ class AsyncGPUModelRunnerOutput(AsyncModelRunnerOutput):
          return output
  
  
@@ -228,7 +228,7 @@ index c97394845..1ef9c2a0b 100644
  def _copy_pooler_output_to_cpu(
      raw_pooler_output: PoolerOutput, finished_mask: list[bool]
  ) -> list[torch.Tensor | None]:
-@@ -707,6 +910,12 @@ class GPUModelRunner(
+@@ -735,6 +938,12 @@ class GPUModelRunner(
          self._cc_decode_metadata_arange_i64_gpu: torch.Tensor | None = None
          self._cc_decode_metadata_fast_ready_req_ids: tuple[str, ...] | None = None
          self._cc_decode_metadata_has_logged_engaged = False
@@ -241,7 +241,7 @@ index c97394845..1ef9c2a0b 100644
  
          # self.cudagraph_batch_sizes sorts in ascending order.
          if (
-@@ -1134,6 +1343,29 @@ class GPUModelRunner(
+@@ -1161,6 +1370,31 @@ class GPUModelRunner(
              self.async_output_copy_stream = stream
          return stream
  
@@ -260,6 +260,8 @@ index c97394845..1ef9c2a0b 100644
 +    def _can_use_cc_output_worker(self) -> bool:
 +        if not self.cc_output_worker_enabled:
 +            return False
++        if self.check_ep_fault:
++            return False
 +        if self.input_batch.sampling_metadata.output_token_ids:
 +            logger.info_once(
 +                "VLLM_CC_OUTPUT_WORKER falling back to stock output copy because "
@@ -271,7 +273,7 @@ index c97394845..1ef9c2a0b 100644
      def _update_states(self, scheduler_output: "SchedulerOutput") -> Callable | None:
          """Update the cached states and the persistent batch with the scheduler
          output.
-@@ -4779,24 +5011,39 @@ class GPUModelRunner(
+@@ -4878,25 +5112,40 @@ class GPUModelRunner(
                      ].clone(),
                  )
  
@@ -283,6 +285,7 @@ index c97394845..1ef9c2a0b 100644
 -                async_output_copy_stream=self._get_or_create_async_output_copy_stream(),
 -                vocab_size=self.input_batch.vocab_size,
 -                routed_experts=routed_experts_snapshot,
+-                check_ep_fault=self.check_ep_fault,
 -            )
 -        with record_function_or_nullcontext(
 -            "gpu_model_runner: set_async_sampled_token_ids"
@@ -316,6 +319,7 @@ index c97394845..1ef9c2a0b 100644
 +                    async_output_copy_stream=self._get_or_create_async_output_copy_stream(),
 +                    vocab_size=self.input_batch.vocab_size,
 +                    routed_experts=routed_experts_snapshot,
++                    check_ep_fault=self.check_ep_fault,
 +                )
 +                with record_function_or_nullcontext(
 +                    "gpu_model_runner: set_async_sampled_token_ids"
@@ -329,7 +333,7 @@ index c97394845..1ef9c2a0b 100644
  
          return async_output
  
-@@ -6444,6 +6691,9 @@ class GPUModelRunner(
+@@ -6566,6 +6815,9 @@ class GPUModelRunner(
  
          # Calls torch.accelerator.synchronize()
          self._cleanup_profiling_kv_cache()
@@ -339,3 +343,6 @@ index c97394845..1ef9c2a0b 100644
          if current_platform.is_rocm():
              # Drop captured graphs before distributed teardown. On ROCm, delayed
              # graph destruction can surface HSA faults in the next engine startup.
+-- 
+2.43.0
+

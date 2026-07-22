@@ -1,7 +1,7 @@
-From d9f71640ea2272d78809a69c27dc1d7a02c10f5e Mon Sep 17 00:00:00 2001
+From 56219cc43545d7959a3895752fba845727f2adee Mon Sep 17 00:00:00 2001
 From: Jules Drean <jules@tinfoil.sh>
 Date: Wed, 22 Jul 2026 08:03:44 +0000
-Subject: [PATCH 115/118] security: validate CC fast-path metadata and token
+Subject: [PATCH 117/117] security: validate CC fast-path metadata and token
  domains
 
 ---
@@ -11,20 +11,20 @@ Subject: [PATCH 115/118] security: validate CC fast-path metadata and token
  3 files changed, 26 insertions(+), 3 deletions(-)
 
 diff --git a/vllm/v1/sample/rejection_sampler.py b/vllm/v1/sample/rejection_sampler.py
-index 35d6d8cc4..4bfbb4086 100644
+index 1324191be..eddbb3a85 100644
 --- a/vllm/v1/sample/rejection_sampler.py
 +++ b/vllm/v1/sample/rejection_sampler.py
-@@ -324,7 +324,7 @@ class RejectionSampler(nn.Module):
-         ):
-             output_token_ids_np = output_token_ids.cpu().numpy()
-             # Create mask for valid tokens.
--            valid_mask = (output_token_ids_np != PLACEHOLDER_TOKEN_ID) & (
-+            valid_mask = (output_token_ids_np >= 0) & (
-                 output_token_ids_np < vocab_size
-             )
-             output_logprobs = None
+@@ -266,7 +266,7 @@ class RejectionSampler(nn.Module):
+         """
+         output_token_ids_np = output_token_ids.cpu().numpy()
+         # Create mask for valid tokens.
+-        valid_mask = (output_token_ids_np != PLACEHOLDER_TOKEN_ID) & (
++        valid_mask = (output_token_ids_np >= 0) & (
+             output_token_ids_np < vocab_size
+         )
+         output_logprobs = None
 diff --git a/vllm/v1/worker/block_table.py b/vllm/v1/worker/block_table.py
-index f678dfcc6..4226f61bf 100644
+index f31005985..65398d9dc 100644
 --- a/vllm/v1/worker/block_table.py
 +++ b/vllm/v1/worker/block_table.py
 @@ -299,6 +299,16 @@ class BlockTable:
@@ -71,10 +71,10 @@ index f678dfcc6..4226f61bf 100644
          rows: list[int] = []
          starts: list[int] = []
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index 5073aadab..20bbcf79a 100644
+index 76b24459f..96b2ebbd7 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
-@@ -535,7 +535,7 @@ def _calc_valid_sampled_token_count(
+@@ -554,7 +554,7 @@ def _calc_valid_sampled_token_count(
      invalid_req_indices: Sequence[int],
  ) -> list[int]:
      sampled_token_ids_np = sampled_token_ids_cpu.numpy()

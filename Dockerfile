@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1.6
 #
-# Patched vLLM image. Base is digest-pinned for attestation. See HANDOFF.md
-# and patches/README.md for the candidate's evidence and patch provenance.
-ARG VLLM_BASE_IMAGE=vllm/vllm-openai:v0.23.0@sha256:6d8429e38e3747723ca07ee1b17972e09bb9c51c4032b266f24fb1cc3b22ed8f
+# CC/MTP-optimized vLLM v0.25.1 V1 candidate. The amd64 base is digest-pinned so
+# the full-CC comparison can be reproduced independently of mutable tags.
+ARG VLLM_BASE_IMAGE=vllm/vllm-openai:v0.25.1@sha256:f0b9a0dc75a9fca3b6811e3279367b2d6a448055a000bfd13859587d74cef268
 FROM ${VLLM_BASE_IMAGE}
 
 ARG SOURCE_REVISION=unversioned
@@ -40,8 +40,6 @@ RUN set -eux; \
         openssl=3.0.2-0ubuntu1.25; \
     rm -rf /var/lib/apt/lists/*
 
-# Patches use vLLM source-root paths (a/vllm/...). Discover the installed
-# package instead of assuming a Python minor-version-specific location.
 COPY patches/ /tmp/tinfoil-patches/
 RUN set -eux; \
     test -x /usr/bin/patch; \
@@ -54,7 +52,7 @@ RUN set -eux; \
     done; \
     find "$VLLM_PACKAGE_ROOT" -name '__pycache__' -type d -exec rm -rf {} + || true; \
     rm -rf /tmp/tinfoil-patches; \
-    python3 -c "import vllm; assert vllm.__version__.startswith('0.23.0'), vllm.__version__; print('vllm', vllm.__version__, 'with tinfoil patches')"
+    python3 -c "import vllm; assert vllm.__version__.startswith('0.25.1'), vllm.__version__; print('vllm', vllm.__version__, 'with CC/MTP patches')"
 
 # Gemma 4 video decoding reaches FFmpeg through OpenCV. The newest compatible
 # OpenCV wheel does not yet contain FFmpeg 8.1.2, so video is disabled in the
@@ -85,45 +83,51 @@ assert importlib.util.find_spec("mooncake") is None
 PY
 
 RUN python3 - <<'PY'
-import inspect
+from pathlib import Path
 
 import vllm
-from vllm import sampling_params
-from vllm.v1.sample import rejection_sampler
-from vllm.v1.structured_output import utils as structured_output_utils
-from vllm.v1.worker import block_table, gpu_model_runner
-from vllm.tool_parsers import gemma4_tool_parser
 
+root = Path(vllm.__file__).resolve().parent
 source = "\n".join(
-    inspect.getsource(module)
-    for module in (
-        gpu_model_runner,
-        block_table,
-        rejection_sampler,
-        structured_output_utils,
-        sampling_params,
-        gemma4_tool_parser,
+    (root / relative).read_text()
+    for relative in (
+        "envs.py",
+        "sampling_params.py",
+        "platforms/cuda.py",
+        "platforms/interface.py",
+        "utils/platform_utils.py",
+        "utils/torch_utils.py",
+        "v1/worker/gpu_model_runner.py",
+        "v1/worker/block_table.py",
+        "v1/sample/rejection_sampler.py",
+        "v1/spec_decode/llm_base_proposer.py",
     )
 )
 required = (
+    "VLLM_CC_PAGEABLE_H2D",
+    "prefer_pinned",
+    "is_confidential_compute_enabled",
+    "VLLM_DISABLE_STRUCTURED_OUTPUT_REGEX",
+    "uses_grammar_constraint",
+    "logitsprocs_need_output_token_ids=bool(custom_logitsprocs)",
+    'share_embeddings and hasattr(self.model, "has_own_embed_tokens")',
     "VLLM_CC_OUTPUT_WORKER",
     "VLLM_CC_SPEC_COUNT_FAST_PUBLICATION",
     "VLLM_CC_DECODE_METADATA_FASTPATH",
+    "VLLM_CC_BLOCK_TABLE_DIRTY_UPDATE",
+    "self.pin_memory = PIN_MEMORY",
     "_cc_uniform_mtp_decode_metadata_kernel",
-    "_cc_mtp_decode_gpu_synced",
     "_coalesce_dirty_updates",
-    "score = tl.where(vocab_mask, score, float(\"-inf\"))",
-    "compile_regex_with_timeout",
-    "VLLM_DISABLE_STRUCTURED_OUTPUT_REGEX",
-    "_combine_tool_call_deltas",
+    "sampled_token_ids_np >= 0",
 )
 missing = [marker for marker in required if marker not in source]
 if missing:
-    raise SystemExit(f"missing CC/MTP patch markers: {missing}")
+    raise SystemExit(f"missing v0.25.1 CC patch markers: {missing}")
 
-print("verified vLLM", vllm.__version__, "CC/MTP handoff patches")
+print("verified v0.25.1 V1 CC/MTP patch set")
 PY
 
 LABEL org.opencontainers.image.source="https://github.com/tinfoilsh/confidential-gemma4-31b" \
       org.opencontainers.image.revision="${SOURCE_REVISION}" \
-      com.tinfoil.vllm.runtime-revision="d703207b40ed80de61edc8d2dd569d7dec48c033"
+      com.tinfoil.vllm.runtime-revision="f7ccdd0596cb6899bc0b32a1ca581d9f67250db7" \
+      com.tinfoil.vllm.variant="cc-mtp-perf-v0.25.1-v1"

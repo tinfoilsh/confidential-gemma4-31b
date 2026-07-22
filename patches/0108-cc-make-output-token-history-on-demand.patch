@@ -1,7 +1,7 @@
-From 02c1be374bd17ef6250bd8a831c0631b110726c2 Mon Sep 17 00:00:00 2001
+From af7e8119a2c3b4bc584b22a189e3305bc19f1fb6 Mon Sep 17 00:00:00 2001
 From: Jules Drean <jules@tinfoil.sh>
 Date: Tue, 23 Jun 2026 16:57:32 -0400
-Subject: cc: make output token history on demand
+Subject: [PATCH 108/117] cc: make output token history on demand
 
 ---
  vllm/v1/sample/metadata.py         |  1 +
@@ -22,10 +22,10 @@ index fa4ceac8e..b6c1626ec 100644
      # `allowed_token_ids_mask` is a 2D bool tensor of shape (max batch size,
      # vocab size).
 diff --git a/vllm/v1/worker/gpu_input_batch.py b/vllm/v1/worker/gpu_input_batch.py
-index 89d69c0bd..9d0ebf79a 100644
+index 28d1a04b7..3bfa3827b 100644
 --- a/vllm/v1/worker/gpu_input_batch.py
 +++ b/vllm/v1/worker/gpu_input_batch.py
-@@ -876,16 +876,7 @@ class InputBatch:
+@@ -877,16 +877,7 @@ class InputBatch:
  
          # Only set output_token_ids if required by the current requests'
          # sampling parameters.
@@ -43,7 +43,7 @@ index 89d69c0bd..9d0ebf79a 100644
          output_token_ids = (
              cast(list[list[int]], self.req_output_token_ids)
              if needs_output_token_ids
-@@ -925,6 +916,7 @@ class InputBatch:
+@@ -926,6 +917,7 @@ class InputBatch:
              presence_penalties=self.presence_penalties[:num_reqs],
              repetition_penalties=self.repetition_penalties[:num_reqs],
              output_token_ids=output_token_ids,
@@ -51,7 +51,7 @@ index 89d69c0bd..9d0ebf79a 100644
              spec_token_ids=self.spec_token_ids,
              no_penalties=self.no_penalties,
              allowed_token_ids_mask=allowed_token_ids_mask,
-@@ -956,6 +948,18 @@ class InputBatch:
+@@ -957,6 +949,18 @@ class InputBatch:
              pooling_states=pooling_states,
          )
  
@@ -70,7 +70,7 @@ index 89d69c0bd..9d0ebf79a 100644
      def _make_prompt_token_ids_cpu_tensor(self) -> torch.Tensor:
          num_reqs = self.num_reqs
          max_prompt_len = self.num_prompt_tokens[:num_reqs].max()
-@@ -1008,7 +1012,7 @@ class InputBatch:
+@@ -1009,7 +1013,7 @@ class InputBatch:
          tensor and corresponding copy-ready event. Used to repair
          output_token_ids prior to sampling, if needed by logits processors.
          """
@@ -80,19 +80,19 @@ index 89d69c0bd..9d0ebf79a 100644
              self.async_copy_ready_event = async_copy_ready_event
          else:
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index 1ef9c2a0b..ca4ffad83 100644
+index 1211eec58..bb6ad2d8e 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
-@@ -1358,7 +1358,7 @@ class GPUModelRunner(
-     def _can_use_cc_output_worker(self) -> bool:
-         if not self.cc_output_worker_enabled:
+@@ -1387,7 +1387,7 @@ class GPUModelRunner(
+             return False
+         if self.check_ep_fault:
              return False
 -        if self.input_batch.sampling_metadata.output_token_ids:
 +        if self.input_batch.sampling_metadata.requires_cpu_output_token_history:
              logger.info_once(
                  "VLLM_CC_OUTPUT_WORKER falling back to stock output copy because "
                  "sampling metadata needs CPU-visible output token ids."
-@@ -5107,7 +5107,7 @@ class GPUModelRunner(
+@@ -5212,7 +5212,7 @@ class GPUModelRunner(
          # we only copy when needed for structured output, penalties or bad_words.
          if self.use_async_scheduling and not (
              scheduler_output.has_structured_output_requests
@@ -101,7 +101,7 @@ index 1ef9c2a0b..ca4ffad83 100644
          ):
              return
          # We must also set the corresponding request ids.
-@@ -6411,6 +6411,7 @@ class GPUModelRunner(
+@@ -6535,6 +6535,7 @@ class GPUModelRunner(
              presence_penalties=dummy_tensors(0.1),
              repetition_penalties=dummy_tensors(0.1),
              output_token_ids=[[] for _ in range(num_reqs)],
@@ -109,3 +109,6 @@ index 1ef9c2a0b..ca4ffad83 100644
              spec_token_ids=[[] for _ in range(num_reqs)],
              allowed_token_ids_mask=None,
              bad_words_token_ids={},
+-- 
+2.43.0
+

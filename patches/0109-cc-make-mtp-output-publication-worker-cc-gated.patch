@@ -1,17 +1,17 @@
-From 29c8c369a9ed05ca7d91b812b59c56ae17f30666 Mon Sep 17 00:00:00 2001
+From f0f900ccfcb055f7191102824749372b8bcc08db Mon Sep 17 00:00:00 2001
 From: Jules Drean <jules@tinfoil.sh>
 Date: Wed, 24 Jun 2026 04:18:36 -0400
-Subject: cc: make mtp output publication worker cc gated
+Subject: [PATCH 109/117] cc: make mtp output publication worker cc gated
 
 ---
- vllm/v1/worker/gpu_model_runner.py | 106 +++++++++++++++++------------
- 1 file changed, 64 insertions(+), 42 deletions(-)
+ vllm/v1/worker/gpu_model_runner.py | 107 +++++++++++++++++------------
+ 1 file changed, 64 insertions(+), 43 deletions(-)
 
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index d839298f8..94dd6d22e 100644
+index bb6ad2d8e..584e10050 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
-@@ -370,9 +370,9 @@ def _copy_routed_experts_to_cpu_nonblocking(
+@@ -384,9 +384,9 @@ def _copy_routed_experts_to_cpu_nonblocking(
  
  @dataclass
  class CCOutputPublicationResult:
@@ -24,7 +24,7 @@ index d839298f8..94dd6d22e 100644
  
  
  class CCOutputPublication:
-@@ -402,6 +402,8 @@ class CCOutputPublicationTask:
+@@ -416,6 +416,8 @@ class CCOutputPublicationTask:
      sampled_token_ids: torch.Tensor
      logprobs_tensors: LogprobsTensors | None
      routed_experts: RoutedExpertsTensors | None
@@ -33,16 +33,16 @@ index d839298f8..94dd6d22e 100644
      ready_event: torch.Event
      publication: CCOutputPublication
  
-@@ -429,6 +431,8 @@ class CCOutputPublicationWorker:
+@@ -443,6 +445,8 @@ class CCOutputPublicationWorker:
          sampled_token_ids: torch.Tensor,
          logprobs_tensors: LogprobsTensors | None,
          routed_experts: RoutedExpertsTensors | None,
 +        invalid_req_indices: list[int],
 +        vocab_size: int,
      ) -> CCOutputPublication:
-         ccbench_instant(
-             "ccbench.output.worker.submit",
-@@ -448,6 +452,8 @@ class CCOutputPublicationWorker:
+         ready_event = torch.Event()
+         ready_event.record(torch.cuda.current_stream())
+@@ -452,6 +456,8 @@ class CCOutputPublicationWorker:
                  sampled_token_ids=sampled_token_ids,
                  logprobs_tensors=logprobs_tensors,
                  routed_experts=routed_experts,
@@ -51,59 +51,62 @@ index d839298f8..94dd6d22e 100644
                  ready_event=ready_event,
                  publication=publication,
              )
-@@ -491,18 +497,41 @@ class CCOutputPublicationWorker:
-                 ):
-                     task.ready_event.synchronize()
-                     with torch.cuda.stream(copy_stream):
--                        result = CCOutputPublicationResult(
--                            sampled_token_ids_cpu=_copy_tensor_to_cpu_nonblocking(
--                                task.sampled_token_ids, self.pin_memory
--                            ),
--                            logprobs_tensors_cpu=_copy_logprobs_to_cpu_nonblocking(
--                                task.logprobs_tensors, self.pin_memory
--                            ),
--                            routed_experts_cpu=_copy_routed_experts_to_cpu_nonblocking(
--                                task.routed_experts, self.pin_memory
--                            ),
-+                        sampled_token_ids_cpu = _copy_tensor_to_cpu_nonblocking(
-+                            task.sampled_token_ids, self.pin_memory
-+                        )
-+                        logprobs_tensors_cpu = _copy_logprobs_to_cpu_nonblocking(
-+                            task.logprobs_tensors, self.pin_memory
-+                        )
-+                        routed_experts_cpu = _copy_routed_experts_to_cpu_nonblocking(
-+                            task.routed_experts, self.pin_memory
-                         )
-                     copy_stream.synchronize()
-+                    max_gen_len = sampled_token_ids_cpu.shape[-1]
-+                    if max_gen_len == 1:
-+                        sampled_token_ids = sampled_token_ids_cpu.tolist()
-+                        for i in task.invalid_req_indices:
-+                            sampled_token_ids[i].clear()
-+                        logprobs = None
-+                        if logprobs_tensors_cpu is not None:
-+                            logprobs = logprobs_tensors_cpu.tolists()
-+                    else:
-+                        sampled_token_ids, logprobs = RejectionSampler.parse_output(
-+                            sampled_token_ids_cpu,
-+                            task.vocab_size,
-+                            task.invalid_req_indices,
-+                            logprobs_tensors=logprobs_tensors_cpu,
-+                        )
-+                    routed_experts = (
-+                        routed_experts_cpu.tolists()
-+                        if routed_experts_cpu is not None
-+                        else None
+@@ -481,19 +487,43 @@ class CCOutputPublicationWorker:
+             try:
+                 task.ready_event.synchronize()
+                 with torch.cuda.stream(copy_stream):
+-                    result = CCOutputPublicationResult(
+-                        sampled_token_ids_cpu=_copy_tensor_to_cpu_nonblocking(
+-                            task.sampled_token_ids, self.pin_memory
+-                        ),
+-                        logprobs_tensors_cpu=_copy_logprobs_to_cpu_nonblocking(
+-                            task.logprobs_tensors, self.pin_memory
+-                        ),
+-                        routed_experts_cpu=_copy_routed_experts_to_cpu_nonblocking(
+-                            task.routed_experts, self.pin_memory
+-                        ),
++                    sampled_token_ids_cpu = _copy_tensor_to_cpu_nonblocking(
++                        task.sampled_token_ids, self.pin_memory
 +                    )
-+                    result = CCOutputPublicationResult(
++                    logprobs_tensors_cpu = _copy_logprobs_to_cpu_nonblocking(
++                        task.logprobs_tensors, self.pin_memory
++                    )
++                    routed_experts_cpu = _copy_routed_experts_to_cpu_nonblocking(
++                        task.routed_experts, self.pin_memory
+                     )
+                 copy_stream.synchronize()
+-                task.publication.set_result(result)
++                max_gen_len = sampled_token_ids_cpu.shape[-1]
++                if max_gen_len == 1:
++                    sampled_token_ids = sampled_token_ids_cpu.tolist()
++                    for i in task.invalid_req_indices:
++                        sampled_token_ids[i].clear()
++                    logprobs = None
++                    if logprobs_tensors_cpu is not None:
++                        logprobs = logprobs_tensors_cpu.tolists()
++                else:
++                    sampled_token_ids, logprobs = RejectionSampler.parse_output(
++                        sampled_token_ids_cpu,
++                        task.vocab_size,
++                        task.invalid_req_indices,
++                        logprobs_tensors=logprobs_tensors_cpu,
++                    )
++                routed_experts = (
++                    routed_experts_cpu.tolists()
++                    if routed_experts_cpu is not None
++                    else None
++                )
++                task.publication.set_result(
++                    CCOutputPublicationResult(
 +                        sampled_token_ids=sampled_token_ids,
 +                        logprobs=logprobs,
 +                        routed_experts=routed_experts,
 +                    )
-                     task.publication.set_result(result)
++                )
              except BaseException as exc:
                  task.publication.set_error(exc)
-@@ -513,41 +542,18 @@ class AsyncGPUWorkerModelRunnerOutput(AsyncModelRunnerOutput):
+ 
+@@ -503,40 +533,17 @@ class AsyncGPUWorkerModelRunnerOutput(AsyncModelRunnerOutput):
          self,
          model_runner_output: ModelRunnerOutput,
          publication: CCOutputPublication,
@@ -116,8 +119,7 @@ index d839298f8..94dd6d22e 100644
 -        self.vocab_size = vocab_size
  
      def get_output(self) -> ModelRunnerOutput:
-         with ccbench_span("ccbench.output.worker.result"):
-             result = self._publication.result()
+         result = self._publication.result()
 -        sampled_token_ids_cpu = result.sampled_token_ids_cpu
 -        max_gen_len = sampled_token_ids_cpu.shape[-1]
 -
@@ -148,7 +150,7 @@ index d839298f8..94dd6d22e 100644
  
          return output
  
-@@ -942,9 +948,23 @@ class GPUModelRunner(
+@@ -938,9 +945,23 @@ class GPUModelRunner(
          self._cc_decode_metadata_arange_i64_gpu: torch.Tensor | None = None
          self._cc_decode_metadata_fast_ready_req_ids: tuple[str, ...] | None = None
          self._cc_decode_metadata_has_logged_engaged = False
@@ -173,16 +175,7 @@ index d839298f8..94dd6d22e 100644
          if self.cc_output_worker_enabled:
              logger.info("Using experimental CC output publication worker.")
          self._cc_output_publication_worker: CCOutputPublicationWorker | None = None
-@@ -972,6 +992,8 @@ class GPUModelRunner(
-                         self.speculative_config
-                         and self.speculative_config.use_gemma4_mtp()
-                     ),
-+                    "cc_output_worker_requested": cc_output_worker_requested,
-+                    "cc_output_worker_cc_enabled": cc_output_worker_cc_enabled,
-                     "cc_output_worker_enabled": self.cc_output_worker_enabled,
-                     "cc_decode_metadata_fastpath": self.cc_decode_metadata_fastpath,
-                     "pin_memory": self.pin_memory,
-@@ -5143,9 +5165,9 @@ class GPUModelRunner(
+@@ -5120,9 +5141,9 @@ class GPUModelRunner(
                          sampled_token_ids=sampler_output.sampled_token_ids,
                          logprobs_tensors=sampler_output.logprobs_tensors,
                          routed_experts=routed_experts_snapshot,
@@ -194,3 +187,6 @@ index d839298f8..94dd6d22e 100644
                  )
                  self.input_batch.sampled_token_ids_cpu = None
                  self.input_batch.async_copy_ready_event = None
+-- 
+2.43.0
+

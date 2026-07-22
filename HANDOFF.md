@@ -1,88 +1,114 @@
-# vLLM v0.23.0 CC/MTP Handoff
+# vLLM v0.25.1 Gemma 4 CC/MTP Handoff
 
 ## Status
 
-This branch packages the security-hardened successor to the validated Gemma 4
-confidential-computing performance candidate. Release `v0.0.21` remains a
-prerelease and must not be promoted: its exact image predates the security
-backports and dependency hardening described below.
+Ready for review, merge, and a release build from `main`. Do not promote the
+commit-addressed review image directly; after merge, dispatch the release
+workflow so it builds, pins, measures, attests, and publishes the final image.
 
-| Item | Value |
+| Item | Immutable value |
 |---|---|
-| vLLM base | `v0.23.0` / `0fc695fc6d1d82e9a5ac6835ac8e4e1c83703665` |
-| Hardened candidate | `d703207b4` |
-| Preserved handoff | `52b60ccc7c48b5a36791036fbacd1bcc1911ca8f` |
-| Source branch | `tinfoilsh/vllm-cc-opt:prod/gemma4-cc-v0230-b300-20260722` |
+| vLLM base | `v0.25.1` / `752a3a504485790a2e8491cacbb35c137339ad34` |
+| vLLM candidate | `tinfoilsh/vllm-cc-opt@f7ccdd0596cb6899bc0b32a1ca581d9f67250db7` |
+| vLLM branch | `milestone/gemma4-cc-v0251-v1-perf-b300-20260722` |
+| Deployment candidate | `b4426497a6c06df09bf96b1f87a886c574764abe` |
+| Review image | `sha256:fc473096b8527c19bf44e7d164772a70e61c225d0a6d936a7d8f5be204f08372` |
+| AMD64 manifest | `sha256:698ea028d6b63474364d8e340837ed868142bc39fb6c50877273051e377f2a45` |
+| Review build | GitHub Actions run `29958352779` |
+| Validation | INF14, one NVIDIA B300, full CPU and GPU CC |
 | Evidence | private `tinfoilsh/vllm-cc-gemma4-lab` repository |
-| Validation host | inf14, NVIDIA B300, full CC enclave |
-| Prior prerelease | `v0.0.21` |
-| Prior image | `sha256:a19c72bc11dd1a086e55c1e6af701e804e4f8dfeda134a7660105549309e8d9d` |
-| Security review | in progress; promotion blocked pending fresh CC validation |
 
-On the B300, stock v0.23.0 reached 569.05 output tokens/second at concurrency
-8. The repaired five-gate candidate produced 891.10, 970.23, and 985.34
-tokens/second in three identical runs, for a 970.23 median and a 70.5% gain
-over stock. At concurrency 16, the candidate produced 993.09 and 972.14
-tokens/second. Every benchmark completed with zero failed requests.
+## Model Identity
 
-Sequential same-enclave restarts produced 956-1,015 tokens/second, but those
-runs benefited from warm process/GPU state and are not used as the production
-headline. Clean hardened releases produced 875.01 tokens/second without the
-allocator override and 870.50 with it, which is indistinguishable at the
-observed launch-to-launch variance. The production config conservatively
-retains the long-standing `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`
-setting for allocator behavior, not as a claimed throughput optimization.
+- Target: `google/gemma-4-31B-it@842da3794eaa0b77d5f08bae87a17459d91ff475`
+- Target MPK: `cda2f261f72d80a847eb6fabea1f9949bf14ce5bb323808a8e2e4a9f09018357_62578692096_827ad0bf-94a4-5620-9569-8f3a34cc5154`
+- Assistant: `google/gemma-4-31B-it-assistant@34ef9f029d1c52bccac2def222523af32f3ccd0f`
+- Assistant MPK: `2d92158d05e976de143bd05ff87977c73523ce6adeff1b559ebf32a2d230d634_971251712_27ee073f-136c-5855-a1a3-1fdc293ec0bb`
 
-The exact `v0.0.21` release passed 70 sequential API requests and 140
-concurrent oracle-checked requests in a fresh full-CC enclave. Its five c8 runs
-ranged from 800.71 to 906.58 output tokens/second with an 870.50 median, 53.0%
-above the matched stock v0.23.0 result of 569.05.
+The target tensor files are byte-identical to the preceding HF revision. The
+new MPK intentionally carries the updated tokenizer, chat template, and model
+metadata.
 
-The old `52b60ccc7` image passed 21 sequential requests with dirty updates
-disabled, then failed all seven API cases and became nondeterministic across 70
-requests when only that gate was enabled. Commit `f49f4a1c5` coalesces
-overlapping writes and sources each merged range from the authoritative final
-CPU block table. With the gate enabled, the fixed image passed:
+## Runtime Decision
 
-- 5,000 randomized coalescing property cases;
-- 70 of 70 sequential requests across seven API modes;
-- 140 of 140 shuffled requests at concurrency 16 with zero oracle mismatches;
-- 70 of 70 no-MTP requests; and
-- nine matched MTP load-sweep runs with zero request failures.
+Use vLLM V1 with `TRITON_ATTN` and MTP=4. These are correctness constraints:
 
-## Promotion Status
+- Stock v0.25.1 V2 produced corrupted Gemma output with MTP, without MTP,
+  with automatic or explicit Triton attention, and under eager execution.
+- Stock v0.25.1 V1 produced correct output without MTP.
+- Stock v0.25.1 V1 MTP failed initialization because the release predates
+  upstream fix `b2b8f679d` / PR #47953. Patch `0104` carries that fix.
+- FlashInfer MTP graph capture selected a TRT-LLM kernel unavailable for
+  Gemma 4's 512-wide draft attention. Explicit Triton is the supported path.
 
-Promotion is blocked until the hardened candidate is rebuilt, rescanned,
-attested, and rerun through the clean full-CC correctness, concurrency, no-MTP,
-and performance gates. Do not deploy `v0.0.21`.
+These controls rule out MTP, CUDA graphs, the modelpack, and CC alone as the
+cause of V2 corruption. Do not enable V2 for this release.
 
-Security hardening after the original performance validation includes:
+## Correctness
 
-- official vLLM backports for three high-severity advisories;
-- rejection of public structured-output regex constraints, in addition to the
-  upstream compilation timeout;
-- bounds checks before the CC dirty block-table Triton write;
-- strict release source/tag validation and least-privilege workflow defaults;
-- patched OpenSSL, GnuPG, Pillow, MCP, and pyasn1 packages;
-- removal of the unused Mooncake connector; and
-- explicit video disablement plus OpenCV removal until its wheel carries
-  FFmpeg 8.1.2 or newer. Image input remains enabled.
-- correct final-argument streaming when Gemma 4 emits parallel tool calls.
+The exact review image passed in a full-CC enclave:
 
-Use `validation/validate_stock_candidate_cc.py` for API comparison. The lab
-repository contains the original harness, result JSON, patch manifest, and the
-remaining investigation plan.
+| Suite | Result |
+|---|---:|
+| Deterministic text, streaming, JSON/schema, named tools | 35/35 |
+| Streaming tool corner cases | 25/25 |
+| Responses API text, tools, continuation, parallel tools, image | 30/30 |
+| Concurrent oracle-checked stress, concurrency 16 | 140/140 |
+| Randomized dirty block-table schedules | 5,000/5,000 |
+| Throughput requests across five runs | 320/320 |
 
-## Verification Completed
+There were no output mismatches, nondeterministic cases, failed benchmark
+requests, or token-count discrepancies. Inline image inference returned the
+correct result; streaming, auto and forced tool calls, escaped/nested tool
+arguments, parallel calls, and tool-result continuation all passed.
 
-- The prior 15-patch image applied to vLLM v0.23.0 with zero fuzz.
-- The hardened 21-patch series applies with zero fuzz and matches candidate
-  `d703207b4` plus the intentional structured-output patch; runtime and full-CC
-  verification are pending.
-- The full Gemma 4 tool-parser unit suite passes 52/52, including the parallel
-  streaming regression.
-- Shell and Python validation tools pass syntax checks.
-- `docker buildx build --check` resolves the pinned base and reports no
-  Dockerfile warnings.
-- The prior candidate image built inside a writable full-CC enclave and passed
-  the correctness, stress, regression, and benchmark suites above.
+Runtime policy checks confirmed that regex constraints, remote-media SSRF,
+local-file media, video, and negative prompt token IDs are blocked. Sixty-four
+cancelled streams at concurrency 16 left the engine healthy. One inherited
+v0.25.1 response-semantics issue remains: a blocked `file://` image returns
+HTTP 500 instead of 4xx. No file is read and the engine remains healthy.
+
+## Performance
+
+Headline contract: 64 random prompts, 1,024 input tokens, 256 output tokens,
+concurrency 8, infinite request rate, seed 20260722, temperature 0, ignore EOS,
+MTP=4, and `max-num-seqs=8`.
+
+| Full-CC arm | Five-run output tok/s | Median |
+|---|---|---:|
+| Minimal v0.25.1 V1 MTP repair | 675.77, 668.66, 677.74, 696.48, 695.41 | 677.74 |
+| Full v0.25.1 V1 CC/MTP port | 906.34, 968.29, 965.95, 972.70, 976.72 | **968.29** |
+
+The full port is 42.9% faster than the minimal MTP repair. Its median MTP
+acceptance was 58.20%; all five runs processed exactly 65,536 input and 16,384
+output tokens. A stock v0.25.1 V1 no-MTP reference reached 415.11 tok/s, but it
+is not a matched MTP comparison and its benchmark client inherited the model's
+sampling default instead of explicitly setting temperature 0.
+
+The result is within 0.2% of the prior optimized v0.23.0 headline median of
+970.23 tok/s. Correctness plus performance parity means non-CC differential
+tracing is not required before shipment.
+
+## Patch Scope
+
+The 19 runtime-only patches are documented in `patches/README.md`. The port
+keeps the five CC performance techniques, carries the post-v0.25.1 Gemma MTP
+fix, and removes obsolete v0.23.0 patches:
+
+- three security backports already present in v0.25.1;
+- the old Gemma streaming-parser patch, replaced by v0.25.1's parser engine;
+- benchmark-only MTP observability from the production runtime.
+
+`validation/verify_patch_series.sh` applies every patch to exact v0.25.1 with
+zero fuzz and diffs the result against `f7ccdd0596cb6899bc0b32a1ca581d9f67250db7`.
+
+## Release Procedure
+
+1. Merge this branch to `main`.
+2. Dispatch `tinfoil-release.yml` on `main` with the next strict SemVer and
+   `review_only=false`.
+3. Confirm the workflow creates a release-only child commit that changes only
+   `tinfoil-config.yml`, pins the built digest, and tags that child.
+4. Confirm the publish workflow measures, attests, and publishes the release.
+
+No test containers or images remain on INF14, and production was not modified.
