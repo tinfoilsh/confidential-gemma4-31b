@@ -23,9 +23,8 @@ containers:
       - VLLM_CC_OUTPUT_WORKER: "1"
       - VLLM_CC_SPEC_COUNT_FAST_PUBLICATION: "1"
       - VLLM_CC_DECODE_METADATA_FASTPATH: "1"
-      # Held off until patch 0114 passes the full CC correctness matrix.
-      # See HANDOFF.md before changing it.
-      - VLLM_CC_BLOCK_TABLE_DIRTY_UPDATE: "0"
+      # Patch 0114 passed sequential, concurrent, and no-MTP CC validation.
+      - VLLM_CC_BLOCK_TABLE_DIRTY_UPDATE: "1"
     command: ["--model", "/tinfoil/mpk/mpk-d2f38032f5faaa8a45b433157d0f25da1e533cf233784c7438fe9f46d1fbc3f4","--tensor-parallel-size",
       "1", "--gpu-memory-utilization", "0.90", "--served-model-name", "gemma4-31b", "--enable-auto-tool-choice", "--tool-call-parser",
       "gemma4", "--reasoning-parser", "gemma4", "--chat-template", "examples/tool_chat_template_gemma4.jinja", "--scheduling-policy",

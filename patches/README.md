@@ -11,7 +11,8 @@ directory with `patch -p1 --fuzz=0`.
 - `0101` through `0113` are runtime-only exports of the preserved 13-commit
   handoff stack.
 - `0114` coalesces overlapping dirty block-table writes before the Triton
-  update kernel. It is the first takeover fix and still requires CC validation.
+  update kernel. It is the first takeover fix and has passed full-CC validation
+  on an NVIDIA B300.
 
 The current takeover candidate is commit `f49f4a1c5`, based on preserved
 handoff commit `52b60ccc7c48b5a36791036fbacd1bcc1911ca8f` and vLLM v0.23.0 commit
@@ -19,10 +20,12 @@ handoff commit `52b60ccc7c48b5a36791036fbacd1bcc1911ca8f` and vLLM v0.23.0 commi
 
 ## Gate Status
 
-The deployment configuration enables pageable H2D, output worker, count-only
-fast publication, and decode metadata. It explicitly disables
-`VLLM_CC_BLOCK_TABLE_DIRTY_UPDATE`; that gate remains on hold because the
-latest local evidence shows nondeterministic correctness failures when enabled.
+The deployment configuration enables all five gates, including
+`VLLM_CC_BLOCK_TABLE_DIRTY_UPDATE`. The preserved handoff image failed all
+seven API cases across 70 requests with that gate enabled. Candidate
+`f49f4a1c5` passed the same 70-request sequence, a 140-request concurrent
+oracle comparison, and a 70-request no-MTP control. Raw evidence is in the
+private `tinfoilsh/vllm-cc-gemma4-lab` repository.
 
 ## Regenerating 0101-0114
 

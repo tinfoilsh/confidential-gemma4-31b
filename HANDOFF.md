@@ -2,51 +2,56 @@
 
 ## Status
 
-This branch packages the current Gemma 4 confidential-computing takeover
-candidate for review and validation. It is not production-approved.
+This branch packages the validated Gemma 4 confidential-computing production
+candidate. Release-image publication and a clean-enclave rerun remain before
+deployment promotion.
 
 | Item | Value |
 |---|---|
 | vLLM base | `v0.23.0` / `0fc695fc6d1d82e9a5ac6835ac8e4e1c83703665` |
 | Candidate | `f49f4a1c5` |
 | Preserved handoff | `52b60ccc7c48b5a36791036fbacd1bcc1911ca8f` |
-| Source branch | `tinfoilsh/vllm-cc-opt:handoff/gemma4-cc-v0230-20260628` |
+| Source branch | `tinfoilsh/vllm-cc-opt:prod/gemma4-cc-v0230-b300-20260722` |
 | Evidence | private `tinfoilsh/vllm-cc-gemma4-lab` repository |
+| Validation host | inf14, NVIDIA B300, full CC enclave |
+| Candidate image ID | `sha256:04637d3bc136eeff0f5b56685b7640a900c7e27a57242b9d031b661e3a162b95` |
 
-The final matched throughput run measured 690.41 output tokens/second at
-concurrency 8 under CC, versus 559.30 for stock CC and 713.99 for stock
-non-CC. That recovered 84.8% of the stock CC throughput tax.
+On the B300, stock v0.23.0 reached 569.05 output tokens/second at concurrency
+8. The repaired five-gate candidate produced 891.10, 970.23, and 985.34
+tokens/second in three identical runs, for a 970.23 median and a 70.5% gain
+over stock. At concurrency 16, the candidate produced 993.09 and 972.14
+tokens/second. Every benchmark completed with zero failed requests.
 
-The headline run enabled block-table dirty updates. Later feature-isolation
-work showed that the MTP decode metadata path passed seven of seven API cases
-across three runs after commit `52b60ccc7`, but block-table dirty updates still
-caused nondeterminism. Commit `f49f4a1c5` removes a concrete race by coalescing
-overlapping dirty writes and sourcing them from the final CPU table. This
-branch still disables that gate until the fix passes enclave validation.
+The old `52b60ccc7` image passed 21 sequential requests with dirty updates
+disabled, then failed all seven API cases and became nondeterministic across 70
+requests when only that gate was enabled. Commit `f49f4a1c5` coalesces
+overlapping writes and sources each merged range from the authoritative final
+CPU block table. With the gate enabled, the fixed image passed:
+
+- 5,000 randomized coalescing property cases;
+- 70 of 70 sequential requests across seven API modes;
+- 140 of 140 shuffled requests at concurrency 16 with zero oracle mismatches;
+- 70 of 70 no-MTP requests; and
+- nine matched MTP load-sweep runs with zero request failures.
 
 ## Required Before Release
 
-1. Build the image and confirm all 15 patches apply with zero fuzz.
-2. Run the seven API correctness cases three times with MTP enabled.
-3. Run the same cases once without MTP.
-4. Run a matched stock/candidate four-arm throughput sweep using the exact
-   image that passed correctness.
-5. Keep `VLLM_CC_BLOCK_TABLE_DIRTY_UPDATE=0` unless new committed evidence
-   clears it.
+1. Publish the v0.0.19 release image from this exact branch.
+2. Launch a fresh full-CC enclave from the published digest.
+3. Repeat the deterministic API suite and a matched c8 benchmark.
+4. Record the attested digest and clean-enclave evidence in the lab repository.
 
 Use `validation/validate_stock_candidate_cc.py` for API comparison. The lab
 repository contains the original harness, result JSON, patch manifest, and the
 remaining investigation plan.
 
-## Local Verification Completed
+## Verification Completed
 
-- All 14 deployment patches apply to vLLM v0.23.0 with zero fuzz.
+- All 15 deployment patches apply to vLLM v0.23.0 with zero fuzz.
 - Excluding the intentional structured-output patch, the resulting runtime
   package matches candidate `f49f4a1c5` file for file.
 - Shell and Python validation tools pass syntax checks.
 - `docker buildx build --check` resolves the pinned base and reports no
   Dockerfile warnings.
-
-A full image build was not run on the curation host because the v0.23.0 image
-was not cached and the filesystem had only 7.6GB free. The release workflow or
-a build host with sufficient storage must perform the full build.
+- The full candidate image built inside a writable full-CC enclave and passed
+  the correctness, stress, regression, and benchmark suites above.
