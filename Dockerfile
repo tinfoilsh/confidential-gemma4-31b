@@ -108,7 +108,7 @@ required = (
     "VLLM_DISABLE_STRUCTURED_OUTPUT_REGEX",
     "uses_grammar_constraint",
     "logitsprocs_need_output_token_ids=bool(custom_logitsprocs)",
-    "MTP drafts project target-width embeddings",
+    'share_embeddings and hasattr(self.model, "has_own_embed_tokens")',
 )
 missing = [marker for marker in required if marker not in source]
 if missing:
