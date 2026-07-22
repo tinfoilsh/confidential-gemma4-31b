@@ -22,11 +22,12 @@ tokens/second in three identical runs, for a 970.23 median and a 70.5% gain
 over stock. At concurrency 16, the candidate produced 993.09 and 972.14
 tokens/second. Every benchmark completed with zero failed requests.
 
-A same-enclave five-run A/B found that the inherited
-`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` setting reduced c8 median
-throughput from 1,015.11 to 902.86 tokens/second. Both arms passed 70
-sequential and 140 concurrent correctness requests. The production config
-therefore leaves that allocator override unset.
+A same-enclave, production-hardened five-run A/B found that
+`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` increased c8 median
+throughput from 875.01 to 956.80 tokens/second, a 9.35% gain. Both arms passed
+70 sequential and 140 concurrent correctness requests. The production config
+therefore retains that allocator override. An earlier non-hardened comparison
+was discarded because container hardening was a confounding variable.
 
 The old `52b60ccc7` image passed 21 sequential requests with dirty updates
 disabled, then failed all seven API cases and became nondeterministic across 70
@@ -42,7 +43,7 @@ CPU block table. With the gate enabled, the fixed image passed:
 
 ## Required Before Release
 
-1. Publish the v0.0.20 release image from this exact branch.
+1. Publish the v0.0.21 release image from this exact branch.
 2. Launch a fresh full-CC enclave from the published digest.
 3. Repeat the deterministic API suite and a matched c8 benchmark.
 4. Record the attested digest and clean-enclave evidence in the lab repository.
