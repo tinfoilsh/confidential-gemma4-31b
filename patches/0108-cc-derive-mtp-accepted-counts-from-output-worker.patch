@@ -1,0 +1,91 @@
+From fedb2af198604d50878c9545675dd8b823d9f754 Mon Sep 17 00:00:00 2001
+From: Jules Drean <jules@tinfoil.sh>
+Date: Wed, 24 Jun 2026 04:20:04 -0400
+Subject: cc: derive mtp accepted counts from output worker
+
+---
+ vllm/v1/worker/gpu_model_runner.py | 41 +++++++++++++++++++++++++-----
+ 1 file changed, 34 insertions(+), 7 deletions(-)
+
+diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
+index 94dd6d22e..a4f8dcb7f 100644
+--- a/vllm/v1/worker/gpu_model_runner.py
++++ b/vllm/v1/worker/gpu_model_runner.py
+@@ -968,6 +968,9 @@ class GPUModelRunner(
+         if self.cc_output_worker_enabled:
+             logger.info("Using experimental CC output publication worker.")
+         self._cc_output_publication_worker: CCOutputPublicationWorker | None = None
++        self._cc_valid_sampled_token_count_publication: (
++            CCOutputPublication | None
++        ) = None
+         if self.speculative_config is not None or self.cc_output_worker_enabled:
+             draft_config = (
+                 self.speculative_config.draft_model_config
+@@ -4960,6 +4963,7 @@ class GPUModelRunner(
+         self._draft_probs = None
+         self._draft_prob_req_ids = None
+         self._draft_token_req_ids = None
++        self._cc_valid_sampled_token_count_publication = None
+         self.valid_sampled_token_count_gpu = None
+         self.input_batch.prev_sampled_token_ids = None
+ 
+@@ -5159,15 +5163,18 @@ class GPUModelRunner(
+ 
+             if self._can_use_cc_output_worker():
+                 worker = self._get_or_create_cc_output_publication_worker()
++                publication = worker.submit(
++                    sampled_token_ids=sampler_output.sampled_token_ids,
++                    logprobs_tensors=sampler_output.logprobs_tensors,
++                    routed_experts=routed_experts_snapshot,
++                    invalid_req_indices=invalid_req_indices,
++                    vocab_size=self.input_batch.vocab_size,
++                )
++                if self.use_async_spec_decode:
++                    self._cc_valid_sampled_token_count_publication = publication
+                 async_output = AsyncGPUWorkerModelRunnerOutput(
+                     model_runner_output=output,
+-                    publication=worker.submit(
+-                        sampled_token_ids=sampler_output.sampled_token_ids,
+-                        logprobs_tensors=sampler_output.logprobs_tensors,
+-                        routed_experts=routed_experts_snapshot,
+-                        invalid_req_indices=invalid_req_indices,
+-                        vocab_size=self.input_batch.vocab_size,
+-                    ),
++                    publication=publication,
+                 )
+                 self.input_batch.sampled_token_ids_cpu = None
+                 self.input_batch.async_copy_ready_event = None
+@@ -5335,6 +5342,15 @@ class GPUModelRunner(
+     def _copy_valid_sampled_token_count(
+         self, next_token_ids: torch.Tensor, valid_sampled_tokens_count: torch.Tensor
+     ) -> None:
++        if self.use_async_spec_decode and self._can_use_cc_output_worker():
++            self.valid_sampled_token_count_gpu = valid_sampled_tokens_count
++            self.input_batch.prev_sampled_token_ids = next_token_ids.unsqueeze(1)
++            ccbench_instant(
++                "ccbench.spec.valid_count.copy_to_cpu.skipped",
++                {"reason": "cc_output_worker_publication"},
++            )
++            return
++
+         if self.valid_sampled_token_count_event is None:
+             ccbench_instant(
+                 "ccbench.spec.valid_count.copy_to_cpu.skipped",
+@@ -5373,6 +5389,17 @@ class GPUModelRunner(
+     def _get_valid_sampled_token_count(self) -> list[int]:
+         # Wait until valid_sampled_tokens_count is copied to cpu,
+         prev_sampled_token_ids = self.input_batch.prev_sampled_token_ids
++        if (
++            prev_sampled_token_ids is not None
++            and self._cc_valid_sampled_token_count_publication is not None
++        ):
++            with ccbench_span(
++                "ccbench.spec.valid_count.wait_output_worker",
++                {"num_reqs": int(prev_sampled_token_ids.shape[0])},
++            ):
++                result = self._cc_valid_sampled_token_count_publication.result()
++            return [len(tokens) for tokens in result.sampled_token_ids]
++
+         sampled_count_event = self.valid_sampled_token_count_event
+         if sampled_count_event is None or prev_sampled_token_ids is None:
+             return []

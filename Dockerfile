@@ -1,20 +1,129 @@
 # syntax=docker/dockerfile:1.6
 #
-# Patched vLLM image. Base is digest-pinned for attestation. See patches/
-# for the diff set and README.md for the patching playbook.
-ARG VLLM_BASE_IMAGE=vllm/vllm-openai:v0.22.1@sha256:953d3a06d5e64ab582985cd7401289d3abf2a2c14ef2158e9a84313daeec77d7
+# Patched vLLM image. Base is digest-pinned for attestation. See HANDOFF.md
+# and patches/README.md for the candidate's evidence and patch provenance.
+ARG VLLM_BASE_IMAGE=vllm/vllm-openai:v0.23.0@sha256:6d8429e38e3747723ca07ee1b17972e09bb9c51c4032b266f24fb1cc3b22ed8f
 FROM ${VLLM_BASE_IMAGE}
 
-# Patches are -p1 unified diffs rooted at /; they target
-# usr/local/lib/python3.12/dist-packages/... to match the base image.
+ARG SOURCE_REVISION=unversioned
+
+# Security-only wheel updates are fetched by immutable PyPI artifact URL and
+# verified by BuildKit before they enter the image.
+ADD --checksum=sha256:78cb2c6865a35ab8ff8b75fd122f6033b92a62c82801110e48ddd6c936a45d91 \
+    https://files.pythonhosted.org/packages/84/21/a35af28dcc61f37ed850a2d64c65c701321dfbf25085e469d5559360cbbf/pillow-12.3.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl \
+    /tmp/security-wheels/pillow-12.3.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
+ADD --checksum=sha256:2726bca5e7193f61c5dde8b12500a6de2d9acf6d1a1c0be9e8c2e706437991df \
+    https://files.pythonhosted.org/packages/e2/5e/d118fce19f87a2e7d8101c35c8ae0ec289098a4df0ff244cec23e415aca0/mcp-1.28.1-py3-none-any.whl \
+    /tmp/security-wheels/mcp-1.28.1-py3-none-any.whl
+ADD --checksum=sha256:deda9277cfd454080ec40b207fb6df82206a3a2688735233cdcd8d3d565f088b \
+    https://files.pythonhosted.org/packages/9a/3b/6163796d69c3977d1e4287bea4a6979161cbbdd170ebb430511e8e1999ce/pyasn1-0.6.4-py3-none-any.whl \
+    /tmp/security-wheels/pyasn1-0.6.4-py3-none-any.whl
+
+# Pin patched Ubuntu packages. Exact versions make the security delta
+# reproducible and fail the build if the expected artifacts disappear.
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        dirmngr=2.2.27-3ubuntu2.5 \
+        gnupg=2.2.27-3ubuntu2.5 \
+        gnupg-l10n=2.2.27-3ubuntu2.5 \
+        gnupg-utils=2.2.27-3ubuntu2.5 \
+        gnupg2=2.2.27-3ubuntu2.5 \
+        gpg=2.2.27-3ubuntu2.5 \
+        gpg-agent=2.2.27-3ubuntu2.5 \
+        gpg-wks-client=2.2.27-3ubuntu2.5 \
+        gpg-wks-server=2.2.27-3ubuntu2.5 \
+        gpgconf=2.2.27-3ubuntu2.5 \
+        gpgsm=2.2.27-3ubuntu2.5 \
+        gpgv=2.2.27-3ubuntu2.5 \
+        libssl3=3.0.2-0ubuntu1.25 \
+        openssl=3.0.2-0ubuntu1.25; \
+    rm -rf /var/lib/apt/lists/*
+
+# Patches use vLLM source-root paths (a/vllm/...). Discover the installed
+# package instead of assuming a Python minor-version-specific location.
 COPY patches/ /tmp/tinfoil-patches/
 RUN set -eux; \
     test -x /usr/bin/patch; \
-    cd /; \
+    VLLM_PACKAGE_ROOT="$(python3 -c 'import pathlib, vllm; print(pathlib.Path(vllm.__file__).resolve().parent)')"; \
+    VLLM_SITE_ROOT="$(dirname "$VLLM_PACKAGE_ROOT")"; \
+    cd "$VLLM_SITE_ROOT"; \
     for p in /tmp/tinfoil-patches/*.patch; do \
         echo "Applying $(basename "$p")"; \
         /usr/bin/patch -p1 --no-backup-if-mismatch --fuzz=0 < "$p"; \
     done; \
-    find /usr/local/lib/python3.12/dist-packages/vllm -name '__pycache__' -type d -exec rm -rf {} + || true; \
+    find "$VLLM_PACKAGE_ROOT" -name '__pycache__' -type d -exec rm -rf {} + || true; \
     rm -rf /tmp/tinfoil-patches; \
-    python3 -c "import vllm; print('vllm', vllm.__version__, 'with tinfoil patches')"
+    python3 -c "import vllm; assert vllm.__version__.startswith('0.23.0'), vllm.__version__; print('vllm', vllm.__version__, 'with tinfoil patches')"
+
+# Gemma 4 video decoding reaches FFmpeg through OpenCV. The newest compatible
+# OpenCV wheel does not yet contain FFmpeg 8.1.2, so video is disabled in the
+# runtime config and the vulnerable codec surface is removed. Mooncake is not
+# configured for this deployment and is removed with its build cache.
+RUN set -eux; \
+    python3 -m pip install --no-cache-dir --no-deps \
+        /tmp/security-wheels/pillow-12.3.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl \
+        /tmp/security-wheels/mcp-1.28.1-py3-none-any.whl \
+        /tmp/security-wheels/pyasn1-0.6.4-py3-none-any.whl; \
+    python3 -m pip uninstall -y opencv-python-headless mooncake-transfer-engine; \
+    rm -rf /tmp/security-wheels /opt/uv/cache; \
+    python3 - <<'PY'
+import importlib.metadata
+import importlib.util
+
+expected = {
+    "mcp": "1.28.1",
+    "pillow": "12.3.0",
+    "pyasn1": "0.6.4",
+}
+for distribution, version in expected.items():
+    actual = importlib.metadata.version(distribution)
+    assert actual == version, (distribution, actual, version)
+
+assert importlib.util.find_spec("cv2") is None
+assert importlib.util.find_spec("mooncake") is None
+PY
+
+RUN python3 - <<'PY'
+import inspect
+
+import vllm
+from vllm import sampling_params
+from vllm.v1.sample import rejection_sampler
+from vllm.v1.structured_output import utils as structured_output_utils
+from vllm.v1.worker import block_table, gpu_model_runner
+from vllm.tool_parsers import gemma4_tool_parser
+
+source = "\n".join(
+    inspect.getsource(module)
+    for module in (
+        gpu_model_runner,
+        block_table,
+        rejection_sampler,
+        structured_output_utils,
+        sampling_params,
+        gemma4_tool_parser,
+    )
+)
+required = (
+    "VLLM_CC_OUTPUT_WORKER",
+    "VLLM_CC_SPEC_COUNT_FAST_PUBLICATION",
+    "VLLM_CC_DECODE_METADATA_FASTPATH",
+    "_cc_uniform_mtp_decode_metadata_kernel",
+    "_cc_mtp_decode_gpu_synced",
+    "_coalesce_dirty_updates",
+    "score = tl.where(vocab_mask, score, float(\"-inf\"))",
+    "compile_regex_with_timeout",
+    "VLLM_DISABLE_STRUCTURED_OUTPUT_REGEX",
+    "_combine_tool_call_deltas",
+)
+missing = [marker for marker in required if marker not in source]
+if missing:
+    raise SystemExit(f"missing CC/MTP patch markers: {missing}")
+
+print("verified vLLM", vllm.__version__, "CC/MTP handoff patches")
+PY
+
+LABEL org.opencontainers.image.source="https://github.com/tinfoilsh/confidential-gemma4-31b" \
+      org.opencontainers.image.revision="${SOURCE_REVISION}" \
+      com.tinfoil.vllm.runtime-revision="d703207b40ed80de61edc8d2dd569d7dec48c033"

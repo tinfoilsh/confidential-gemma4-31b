@@ -1,0 +1,55 @@
+From 5d7e1b1a7700d3357737078564340673f1d73682 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Juan=20P=C3=A9rez=20de=20Algaba?=
+ <124347725+jperezdealgaba@users.noreply.github.com>
+Date: Sat, 13 Jun 2026 12:17:38 +0200
+Subject: [PATCH 118/118] [Security] Fix DoS via prompt_embeds on M-RoPE models
+ (#45252)
+
+Signed-off-by: jperezde <jperezde@redhat.com>
+(cherry picked from commit 470229c37efaf69c86e8bc97482b0b1ff7551c65)
+---
+ vllm/v1/worker/gpu_model_runner.py | 19 +++++++++++++++----
+ 1 file changed, 15 insertions(+), 4 deletions(-)
+
+diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
+index 20bbcf79a..8b4d8e7a7 100644
+--- a/vllm/v1/worker/gpu_model_runner.py
++++ b/vllm/v1/worker/gpu_model_runner.py
+@@ -2266,9 +2266,6 @@ class GPUModelRunner(
+     def _init_mrope_positions(self, req_state: CachedRequestState):
+         model = self.get_model()
+         assert supports_mrope(model), "M-RoPE support is not implemented."
+-        assert req_state.prompt_token_ids is not None, (
+-            "M-RoPE requires prompt_token_ids to be available."
+-        )
+         mrope_model = cast(SupportsMRoPE, model)
+ 
+         # `prompt_embeds` is a passthrough modality (no grid_thw), models'
+@@ -2277,9 +2274,23 @@ class GPUModelRunner(
+         mrope_features = [
+             f for f in req_state.mm_features if f.modality != "prompt_embeds"
+         ]
++
++        if req_state.prompt_token_ids is not None:
++            input_tokens = req_state.prompt_token_ids
++        elif req_state.prompt_embeds is not None:
++            # For embeddings-only inputs, get_mrope_input_positions only
++            # needs the sequence length when mm_features is empty (which is
++            # the case here since prompt_embeds are filtered out above).
++            seq_len = req_state.prompt_embeds.shape[0]
++            input_tokens = list(range(seq_len))
++        else:
++            raise ValueError(
++                "M-RoPE requires either prompt_token_ids or prompt_embeds."
++            )
++
+         req_state.mrope_positions, req_state.mrope_position_delta = (
+             mrope_model.get_mrope_input_positions(
+-                req_state.prompt_token_ids,
++                input_tokens,
+                 mrope_features,
+             )
+         )
+-- 
+2.43.0
+

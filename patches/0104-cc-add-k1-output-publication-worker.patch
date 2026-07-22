@@ -1,0 +1,341 @@
+From 93110c32339d05e92e13f87d08862602205412ac Mon Sep 17 00:00:00 2001
+From: Jules Drean <jules@tinfoil.sh>
+Date: Tue, 23 Jun 2026 16:56:15 -0400
+Subject: cc: add k1 output publication worker
+
+---
+ vllm/v1/worker/gpu_model_runner.py | 286 +++++++++++++++++++++++++++--
+ 1 file changed, 268 insertions(+), 18 deletions(-)
+
+diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
+index c97394845..1ef9c2a0b 100644
+--- a/vllm/v1/worker/gpu_model_runner.py
++++ b/vllm/v1/worker/gpu_model_runner.py
+@@ -5,6 +5,7 @@ import functools
+ import gc
+ import itertools
+ import os
++import queue
+ import threading
+ import time
+ from collections import defaultdict
+@@ -317,6 +318,208 @@ class AsyncGPUModelRunnerOutput(AsyncModelRunnerOutput):
+         return output
+ 
+ 
++def _copy_tensor_to_cpu_nonblocking(
++    tensor: torch.Tensor, pin_memory: bool
++) -> torch.Tensor:
++    if tensor.device.type == "cpu":
++        return tensor
++    cpu_tensor = torch.empty(
++        tensor.shape,
++        dtype=tensor.dtype,
++        device="cpu",
++        pin_memory=pin_memory,
++    )
++    cpu_tensor.copy_(tensor, non_blocking=True)
++    return cpu_tensor
++
++
++def _copy_logprobs_to_cpu_nonblocking(
++    logprobs_tensors: LogprobsTensors | None,
++    pin_memory: bool,
++) -> LogprobsTensors | None:
++    if logprobs_tensors is None:
++        return None
++    return LogprobsTensors(
++        _copy_tensor_to_cpu_nonblocking(logprobs_tensors.logprob_token_ids, pin_memory),
++        _copy_tensor_to_cpu_nonblocking(logprobs_tensors.logprobs, pin_memory),
++        _copy_tensor_to_cpu_nonblocking(
++            logprobs_tensors.selected_token_ranks, pin_memory
++        ),
++        logprobs_tensors.cu_num_generated_tokens,
++    )
++
++
++def _copy_routed_experts_to_cpu_nonblocking(
++    routed_experts: RoutedExpertsTensors | None,
++    pin_memory: bool,
++) -> RoutedExpertsTensors | None:
++    if routed_experts is None:
++        return None
++    return RoutedExpertsTensors(
++        _copy_tensor_to_cpu_nonblocking(routed_experts.routing_data, pin_memory),
++        _copy_tensor_to_cpu_nonblocking(routed_experts.slot_mapping, pin_memory),
++    )
++
++
++@dataclass
++class CCOutputPublicationResult:
++    sampled_token_ids_cpu: torch.Tensor
++    logprobs_tensors_cpu: LogprobsTensors | None
++    routed_experts_cpu: RoutedExpertsTensors | None
++
++
++class CCOutputPublication:
++    def __init__(self) -> None:
++        self._done = threading.Event()
++        self._result: CCOutputPublicationResult | None = None
++        self._error: BaseException | None = None
++
++    def set_result(self, result: CCOutputPublicationResult) -> None:
++        self._result = result
++        self._done.set()
++
++    def set_error(self, error: BaseException) -> None:
++        self._error = error
++        self._done.set()
++
++    def result(self) -> CCOutputPublicationResult:
++        self._done.wait()
++        if self._error is not None:
++            raise self._error
++        assert self._result is not None
++        return self._result
++
++
++@dataclass
++class CCOutputPublicationTask:
++    sampled_token_ids: torch.Tensor
++    logprobs_tensors: LogprobsTensors | None
++    routed_experts: RoutedExpertsTensors | None
++    ready_event: torch.Event
++    publication: CCOutputPublication
++
++
++class CCOutputPublicationWorker:
++    def __init__(
++        self,
++        *,
++        device: torch.device,
++        pin_memory: bool,
++    ) -> None:
++        self.device = device
++        self.pin_memory = pin_memory
++        self._queue: queue.Queue[CCOutputPublicationTask | None] = queue.Queue()
++        self._thread = threading.Thread(
++            target=self._run,
++            name="vllm-cc-output-publication-worker",
++            daemon=True,
++        )
++        self._thread.start()
++
++    def submit(
++        self,
++        *,
++        sampled_token_ids: torch.Tensor,
++        logprobs_tensors: LogprobsTensors | None,
++        routed_experts: RoutedExpertsTensors | None,
++    ) -> CCOutputPublication:
++        ready_event = torch.Event()
++        ready_event.record(torch.cuda.current_stream())
++        publication = CCOutputPublication()
++        self._queue.put(
++            CCOutputPublicationTask(
++                sampled_token_ids=sampled_token_ids,
++                logprobs_tensors=logprobs_tensors,
++                routed_experts=routed_experts,
++                ready_event=ready_event,
++                publication=publication,
++            )
++        )
++        return publication
++
++    def shutdown(self) -> None:
++        self._queue.put(None)
++        self._thread.join(timeout=5.0)
++
++    def _run(self) -> None:
++        try:
++            torch.cuda.set_device(self.device)
++            copy_stream = torch.cuda.Stream()
++        except BaseException as exc:
++            logger.exception("CC output publication worker failed to initialize")
++            while True:
++                task = self._queue.get()
++                if task is None:
++                    return
++                task.publication.set_error(exc)
++
++        while True:
++            task = self._queue.get()
++            if task is None:
++                return
++            try:
++                task.ready_event.synchronize()
++                with torch.cuda.stream(copy_stream):
++                    result = CCOutputPublicationResult(
++                        sampled_token_ids_cpu=_copy_tensor_to_cpu_nonblocking(
++                            task.sampled_token_ids, self.pin_memory
++                        ),
++                        logprobs_tensors_cpu=_copy_logprobs_to_cpu_nonblocking(
++                            task.logprobs_tensors, self.pin_memory
++                        ),
++                        routed_experts_cpu=_copy_routed_experts_to_cpu_nonblocking(
++                            task.routed_experts, self.pin_memory
++                        ),
++                    )
++                copy_stream.synchronize()
++                task.publication.set_result(result)
++            except BaseException as exc:
++                task.publication.set_error(exc)
++
++
++class AsyncGPUWorkerModelRunnerOutput(AsyncModelRunnerOutput):
++    def __init__(
++        self,
++        model_runner_output: ModelRunnerOutput,
++        publication: CCOutputPublication,
++        invalid_req_indices: list[int],
++        vocab_size: int,
++    ) -> None:
++        self._model_runner_output = model_runner_output
++        self._publication = publication
++        self._invalid_req_indices = invalid_req_indices
++        self.vocab_size = vocab_size
++
++    def get_output(self) -> ModelRunnerOutput:
++        result = self._publication.result()
++        sampled_token_ids_cpu = result.sampled_token_ids_cpu
++        max_gen_len = sampled_token_ids_cpu.shape[-1]
++
++        if max_gen_len == 1:
++            valid_sampled_token_ids = sampled_token_ids_cpu.tolist()
++            for i in self._invalid_req_indices:
++                valid_sampled_token_ids[i].clear()
++            logprobs_lists = None
++            if result.logprobs_tensors_cpu is not None:
++                logprobs_lists = result.logprobs_tensors_cpu.tolists()
++        else:
++            valid_sampled_token_ids, logprobs_lists = RejectionSampler.parse_output(
++                sampled_token_ids_cpu,
++                self.vocab_size,
++                self._invalid_req_indices,
++                logprobs_tensors=result.logprobs_tensors_cpu,
++            )
++
++        output = self._model_runner_output
++        output.sampled_token_ids = valid_sampled_token_ids
++        output.logprobs = logprobs_lists
++
++        if result.routed_experts_cpu is not None:
++            output.routed_experts = result.routed_experts_cpu.tolists()
++
++        return output
++
++
+ def _copy_pooler_output_to_cpu(
+     raw_pooler_output: PoolerOutput, finished_mask: list[bool]
+ ) -> list[torch.Tensor | None]:
+@@ -707,6 +910,12 @@ class GPUModelRunner(
+         self._cc_decode_metadata_arange_i64_gpu: torch.Tensor | None = None
+         self._cc_decode_metadata_fast_ready_req_ids: tuple[str, ...] | None = None
+         self._cc_decode_metadata_has_logged_engaged = False
++        self.cc_output_worker_enabled = bool(
++            int(os.environ.get("VLLM_CC_OUTPUT_WORKER", "0") or "0")
++        )
++        if self.cc_output_worker_enabled:
++            logger.info("Using experimental CC output publication worker.")
++        self._cc_output_publication_worker: CCOutputPublicationWorker | None = None
+ 
+         # self.cudagraph_batch_sizes sorts in ascending order.
+         if (
+@@ -1134,6 +1343,29 @@ class GPUModelRunner(
+             self.async_output_copy_stream = stream
+         return stream
+ 
++    def _get_or_create_cc_output_publication_worker(
++        self,
++    ) -> CCOutputPublicationWorker:
++        worker = self._cc_output_publication_worker
++        if worker is None:
++            worker = CCOutputPublicationWorker(
++                device=self.device,
++                pin_memory=self.pin_memory,
++            )
++            self._cc_output_publication_worker = worker
++        return worker
++
++    def _can_use_cc_output_worker(self) -> bool:
++        if not self.cc_output_worker_enabled:
++            return False
++        if self.input_batch.sampling_metadata.output_token_ids:
++            logger.info_once(
++                "VLLM_CC_OUTPUT_WORKER falling back to stock output copy because "
++                "sampling metadata needs CPU-visible output token ids."
++            )
++            return False
++        return True
++
+     def _update_states(self, scheduler_output: "SchedulerOutput") -> Callable | None:
+         """Update the cached states and the persistent batch with the scheduler
+         output.
+@@ -4779,24 +5011,39 @@ class GPUModelRunner(
+                     ].clone(),
+                 )
+ 
+-            async_output = AsyncGPUModelRunnerOutput(
+-                model_runner_output=output,
+-                sampled_token_ids=sampler_output.sampled_token_ids,
+-                logprobs_tensors=sampler_output.logprobs_tensors,
+-                invalid_req_indices=invalid_req_indices,
+-                async_output_copy_stream=self._get_or_create_async_output_copy_stream(),
+-                vocab_size=self.input_batch.vocab_size,
+-                routed_experts=routed_experts_snapshot,
+-            )
+-        with record_function_or_nullcontext(
+-            "gpu_model_runner: set_async_sampled_token_ids"
+-        ):
+-            # Save ref of sampled_token_ids CPU tensor if the batch contains
+-            # any requests with sampling params that require output ids.
+-            self.input_batch.set_async_sampled_token_ids(
+-                async_output.sampled_token_ids_cpu,
+-                async_output.async_copy_ready_event,
+-            )
++            if self._can_use_cc_output_worker():
++                worker = self._get_or_create_cc_output_publication_worker()
++                async_output = AsyncGPUWorkerModelRunnerOutput(
++                    model_runner_output=output,
++                    publication=worker.submit(
++                        sampled_token_ids=sampler_output.sampled_token_ids,
++                        logprobs_tensors=sampler_output.logprobs_tensors,
++                        routed_experts=routed_experts_snapshot,
++                    ),
++                    invalid_req_indices=invalid_req_indices,
++                    vocab_size=self.input_batch.vocab_size,
++                )
++                self.input_batch.sampled_token_ids_cpu = None
++                self.input_batch.async_copy_ready_event = None
++            else:
++                async_output = AsyncGPUModelRunnerOutput(
++                    model_runner_output=output,
++                    sampled_token_ids=sampler_output.sampled_token_ids,
++                    logprobs_tensors=sampler_output.logprobs_tensors,
++                    invalid_req_indices=invalid_req_indices,
++                    async_output_copy_stream=self._get_or_create_async_output_copy_stream(),
++                    vocab_size=self.input_batch.vocab_size,
++                    routed_experts=routed_experts_snapshot,
++                )
++                with record_function_or_nullcontext(
++                    "gpu_model_runner: set_async_sampled_token_ids"
++                ):
++                    # Save ref of sampled_token_ids CPU tensor if the batch contains
++                    # any requests with sampling params that require output ids.
++                    self.input_batch.set_async_sampled_token_ids(
++                        async_output.sampled_token_ids_cpu,
++                        async_output.async_copy_ready_event,
++                    )
+ 
+         return async_output
+ 
+@@ -6444,6 +6691,9 @@ class GPUModelRunner(
+ 
+         # Calls torch.accelerator.synchronize()
+         self._cleanup_profiling_kv_cache()
++        if self._cc_output_publication_worker is not None:
++            self._cc_output_publication_worker.shutdown()
++            self._cc_output_publication_worker = None
+         if current_platform.is_rocm():
+             # Drop captured graphs before distributed teardown. On ROCm, delayed
+             # graph destruction can surface HSA faults in the next engine startup.

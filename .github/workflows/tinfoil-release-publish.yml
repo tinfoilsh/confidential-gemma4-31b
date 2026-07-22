@@ -13,8 +13,64 @@ on:
 concurrency:
   group: tinfoil-container-release-${{ github.ref_name }}
 
+permissions: {}
+
 jobs:
+  validate-tag:
+    name: Validate release tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Require a strict release tag
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          if [[ "$REF_TYPE" != "tag" ]]; then
+            echo "::error::Publish must be dispatched against a tag"
+            exit 1
+          fi
+          if [[ ! "$REF_NAME" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::Tag must be strict SemVer in the form vMAJOR.MINOR.PATCH"
+            exit 1
+          fi
+
+      - name: Checkout release tag
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require a release-only child of main
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          git fetch --no-tags origin "$DEFAULT_BRANCH"
+          PARENT_COUNT="$(git cat-file -p HEAD | awk '$1 == "parent" { count++ } END { print count + 0 }')"
+          if [[ "$PARENT_COUNT" != "1" ]]; then
+            echo "::error::Release tag must point to a single-parent commit"
+            exit 1
+          fi
+          PARENT="$(git rev-parse HEAD^)"
+          if ! git merge-base --is-ancestor "$PARENT" "origin/$DEFAULT_BRANCH"; then
+            echo "::error::Release source commit is not on $DEFAULT_BRANCH"
+            exit 1
+          fi
+          if [[ "$(git show -s --format=%s HEAD)" != "chore: pin container image(s) for $VERSION" ]]; then
+            echo "::error::Unexpected release commit message"
+            exit 1
+          fi
+          mapfile -t CHANGED_FILES < <(git diff --name-only HEAD^ HEAD)
+          if [[ "${#CHANGED_FILES[@]}" != "1" || "${CHANGED_FILES[0]}" != "tinfoil-config.yml" ]]; then
+            echo "::error::Release commit may only change tinfoil-config.yml"
+            exit 1
+          fi
+
   measure-and-release:
+    name: Measure, attest, and publish
+    needs: validate-tag
     runs-on: ubuntu-latest
     permissions:
       contents: write       # create the GitHub release
