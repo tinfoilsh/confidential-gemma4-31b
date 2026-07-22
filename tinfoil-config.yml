@@ -13,7 +13,7 @@ models:
 
 containers:
   - name: "gemma4-31b"
-    image: "ghcr.io/tinfoilsh/confidential-gemma4-31b@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    image: "ghcr.io/tinfoilsh/confidential-gemma4-31b@sha256:2fb5ed5486cb32f784c27d91a829d2175e39724704a926d39aa40fb665307039" # v0.0.20
     runtime: nvidia
     gpus: all
     restart: always
