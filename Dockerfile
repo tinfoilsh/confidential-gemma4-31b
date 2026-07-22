@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1.6
 #
-# Patched vLLM image. Base is digest-pinned for attestation. See HANDOFF.md
-# and patches/README.md for the candidate's evidence and patch provenance.
-ARG VLLM_BASE_IMAGE=vllm/vllm-openai:v0.23.0@sha256:6d8429e38e3747723ca07ee1b17972e09bb9c51c4032b266f24fb1cc3b22ed8f
+# Stock vLLM v0.25.1 control. The amd64 base is digest-pinned so the full-CC
+# comparison can be reproduced independently of mutable registry tags.
+ARG VLLM_BASE_IMAGE=vllm/vllm-openai:v0.25.1@sha256:f0b9a0dc75a9fca3b6811e3279367b2d6a448055a000bfd13859587d74cef268
 FROM ${VLLM_BASE_IMAGE}
 
 ARG SOURCE_REVISION=unversioned
@@ -40,21 +40,7 @@ RUN set -eux; \
         openssl=3.0.2-0ubuntu1.25; \
     rm -rf /var/lib/apt/lists/*
 
-# Patches use vLLM source-root paths (a/vllm/...). Discover the installed
-# package instead of assuming a Python minor-version-specific location.
-COPY patches/ /tmp/tinfoil-patches/
-RUN set -eux; \
-    test -x /usr/bin/patch; \
-    VLLM_PACKAGE_ROOT="$(python3 -c 'import pathlib, vllm; print(pathlib.Path(vllm.__file__).resolve().parent)')"; \
-    VLLM_SITE_ROOT="$(dirname "$VLLM_PACKAGE_ROOT")"; \
-    cd "$VLLM_SITE_ROOT"; \
-    for p in /tmp/tinfoil-patches/*.patch; do \
-        echo "Applying $(basename "$p")"; \
-        /usr/bin/patch -p1 --no-backup-if-mismatch --fuzz=0 < "$p"; \
-    done; \
-    find "$VLLM_PACKAGE_ROOT" -name '__pycache__' -type d -exec rm -rf {} + || true; \
-    rm -rf /tmp/tinfoil-patches; \
-    python3 -c "import vllm; assert vllm.__version__.startswith('0.23.0'), vllm.__version__; print('vllm', vllm.__version__, 'with tinfoil patches')"
+RUN python3 -c "import vllm; assert vllm.__version__.startswith('0.25.1'), vllm.__version__; print('stock vllm', vllm.__version__)"
 
 # Gemma 4 video decoding reaches FFmpeg through OpenCV. The newest compatible
 # OpenCV wheel does not yet contain FFmpeg 8.1.2, so video is disabled in the
@@ -84,46 +70,7 @@ assert importlib.util.find_spec("cv2") is None
 assert importlib.util.find_spec("mooncake") is None
 PY
 
-RUN python3 - <<'PY'
-import inspect
-
-import vllm
-from vllm import sampling_params
-from vllm.v1.sample import rejection_sampler
-from vllm.v1.structured_output import utils as structured_output_utils
-from vllm.v1.worker import block_table, gpu_model_runner
-from vllm.tool_parsers import gemma4_tool_parser
-
-source = "\n".join(
-    inspect.getsource(module)
-    for module in (
-        gpu_model_runner,
-        block_table,
-        rejection_sampler,
-        structured_output_utils,
-        sampling_params,
-        gemma4_tool_parser,
-    )
-)
-required = (
-    "VLLM_CC_OUTPUT_WORKER",
-    "VLLM_CC_SPEC_COUNT_FAST_PUBLICATION",
-    "VLLM_CC_DECODE_METADATA_FASTPATH",
-    "_cc_uniform_mtp_decode_metadata_kernel",
-    "_cc_mtp_decode_gpu_synced",
-    "_coalesce_dirty_updates",
-    "score = tl.where(vocab_mask, score, float(\"-inf\"))",
-    "compile_regex_with_timeout",
-    "VLLM_DISABLE_STRUCTURED_OUTPUT_REGEX",
-    "_combine_tool_call_deltas",
-)
-missing = [marker for marker in required if marker not in source]
-if missing:
-    raise SystemExit(f"missing CC/MTP patch markers: {missing}")
-
-print("verified vLLM", vllm.__version__, "CC/MTP handoff patches")
-PY
-
 LABEL org.opencontainers.image.source="https://github.com/tinfoilsh/confidential-gemma4-31b" \
       org.opencontainers.image.revision="${SOURCE_REVISION}" \
-      com.tinfoil.vllm.runtime-revision="d703207b40ed80de61edc8d2dd569d7dec48c033"
+      com.tinfoil.vllm.runtime-revision="752a3a504485790a2e8491cacbb35c137339ad34" \
+      com.tinfoil.vllm.variant="stock-v0.25.1-control"
