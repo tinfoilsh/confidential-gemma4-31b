@@ -128,5 +128,5 @@ PY
 
 LABEL org.opencontainers.image.source="https://github.com/tinfoilsh/confidential-gemma4-31b" \
       org.opencontainers.image.revision="${SOURCE_REVISION}" \
-      com.tinfoil.vllm.runtime-revision="56219cc43545d7959a3895752fba845727f2adee" \
+      com.tinfoil.vllm.runtime-revision="613cb3f8d7e4b414f2fa341ecd0cdac30b2c4414" \
       com.tinfoil.vllm.variant="cc-mtp-perf-v0.25.1-v1"

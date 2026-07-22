@@ -1,9 +1,9 @@
 # vLLM v0.25.1 Deployment Patches
 
-These 17 patches apply in filename order to the official vLLM v0.25.1
+These 18 patches apply in filename order to the official vLLM v0.25.1
 Python package. They were generated from
 `tinfoilsh/vllm-cc-opt:milestone/gemma4-cc-v0251-v1-perf-b300-20260722` at
-commit `56219cc43545d7959a3895752fba845727f2adee`.
+commit `613cb3f8d7e4b414f2fa341ecd0cdac30b2c4414`.
 
 ## Included
 
@@ -25,6 +25,8 @@ commit `56219cc43545d7959a3895752fba845727f2adee`.
   original B300 validation.
 - `0117` validates CC fast-path token domains and packed block-table metadata
   before it reaches the GPU kernels.
+- `0118` registers the deployment gates with vLLM's environment validator;
+  this removes misleading unknown-variable warnings without changing behavior.
 
 ## Removed From v0.23.0
 
@@ -44,5 +46,5 @@ Run:
 validation/verify_patch_series.sh /path/to/vllm-checkout
 ```
 
-The script checks out v0.25.1, applies all 17 patches with zero fuzz, and
+The script checks out v0.25.1, applies all 18 patches with zero fuzz, and
 diffs the result against the source branch commit above.

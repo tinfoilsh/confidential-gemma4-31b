@@ -5,85 +5,11 @@ Subject: [PATCH 117/117] security: validate CC fast-path metadata and token
  domains
 
 ---
- tests/v1/sample/test_rejection_sampler.py | 13 ++++++++
- tests/v1/worker/test_gpu_model_runner.py  | 37 +++++++++++++++++++++++
- vllm/v1/sample/rejection_sampler.py       |  2 +-
- vllm/v1/worker/block_table.py             | 25 ++++++++++++++-
- vllm/v1/worker/gpu_model_runner.py        |  2 +-
- 5 files changed, 76 insertions(+), 3 deletions(-)
+ vllm/v1/sample/rejection_sampler.py |  2 +-
+ vllm/v1/worker/block_table.py       | 25 ++++++++++++++++++++++++-
+ vllm/v1/worker/gpu_model_runner.py  |  2 +-
+ 3 files changed, 26 insertions(+), 3 deletions(-)
 
-diff --git a/tests/v1/sample/test_rejection_sampler.py b/tests/v1/sample/test_rejection_sampler.py
-index b02e53af8..5984a7518 100644
---- a/tests/v1/sample/test_rejection_sampler.py
-+++ b/tests/v1/sample/test_rejection_sampler.py
-@@ -48,6 +48,19 @@ def create_spec_decode_metadata(
-     return metadata
- 
- 
-+def test_parse_output_rejects_all_negative_token_ids():
-+    output_token_ids = torch.tensor(
-+        [[5, PLACEHOLDER_TOKEN_ID, -2, 99]], dtype=torch.int32
-+    )
-+
-+    outputs, logprobs = RejectionSampler.parse_output(
-+        output_token_ids, vocab_size=100
-+    )
-+
-+    assert outputs == [[5, 99]]
-+    assert logprobs is None
-+
-+
- def create_logits_tensor(
-     output_token_ids: list[list[int]],
-     vocab_size: int = 100,
-diff --git a/tests/v1/worker/test_gpu_model_runner.py b/tests/v1/worker/test_gpu_model_runner.py
-index 9dac3f212..82bc534e4 100644
---- a/tests/v1/worker/test_gpu_model_runner.py
-+++ b/tests/v1/worker/test_gpu_model_runner.py
-@@ -1379,6 +1379,43 @@ def test_block_table_dirty_updates_coalesce_overlaps():
-     assert cu_lens == [3, 7]
- 
- 
-+@pytest.mark.parametrize(
-+    ("row", "start", "cu_len"),
-+    [
-+        (-1, 0, 1),
-+        (2, 0, 1),
-+        (0, -1, 1),
-+        (0, 8, 1),
-+    ],
-+)
-+def test_block_table_dirty_updates_reject_out_of_bounds(row, start, cu_len):
-+    from vllm.v1.worker.block_table import BlockTable
-+
-+    block_table = BlockTable.__new__(BlockTable)
-+    block_table.block_table = SimpleNamespace(
-+        np=np.zeros((2, 8), dtype=np.int32)
-+    )
-+    block_table._dirty_rows = [row]
-+    block_table._dirty_starts = [start]
-+    block_table._dirty_values = [42]
-+    block_table._dirty_cu_lens = [cu_len]
-+
-+    with pytest.raises(ValueError, match="out of bounds"):
-+        block_table._coalesce_dirty_updates()
-+
-+
-+def test_valid_sampled_token_count_rejects_all_negative_token_ids():
-+    sampled_token_ids = torch.tensor(
-+        [[5, -1, -2, 99], [0, 10, 11, 12]], dtype=torch.int32
-+    )
-+
-+    counts = gpu_model_runner_module._calc_valid_sampled_token_count(
-+        sampled_token_ids, vocab_size=11, invalid_req_indices=[]
-+    )
-+
-+    assert counts == [1, 2]
-+
-+
- def test_input_batch_with_kernel_block_sizes():
-     """Test InputBatch initialization with kernel_block_sizes parameter."""
-     max_num_reqs = 10
 diff --git a/vllm/v1/sample/rejection_sampler.py b/vllm/v1/sample/rejection_sampler.py
 index 1324191be..eddbb3a85 100644
 --- a/vllm/v1/sample/rejection_sampler.py
