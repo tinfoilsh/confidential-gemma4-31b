@@ -1,0 +1,39 @@
+From 0f9e09aee2e2d0d577bf42a2fc7712136e51c3c6 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Juan=20P=C3=A9rez=20de=20Algaba?=
+ <124347725+jperezdealgaba@users.noreply.github.com>
+Date: Wed, 10 Jun 2026 11:31:43 +0200
+Subject: [PATCH 116/118] [Security] Fix remote DoS via invalid recovered token
+ reinjection (#44744)
+
+Signed-off-by: jperezde <jperezde@redhat.com>
+(cherry picked from commit 8a5cf1ccd65e8ac7635c402c1ec0b08988bc26ca)
+---
+ vllm/v1/sample/rejection_sampler.py | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/vllm/v1/sample/rejection_sampler.py b/vllm/v1/sample/rejection_sampler.py
+index 4bfbb4086..e0d5f63dc 100644
+--- a/vllm/v1/sample/rejection_sampler.py
++++ b/vllm/v1/sample/rejection_sampler.py
+@@ -1027,12 +1027,17 @@ def sample_recovered_tokens_kernel(
+             other=0.0,
+         )
+ 
+-        # Local tile reduction
++        # Local tile reduction.
++        # Mask out-of-vocabulary entries to -inf so they can never win
++        # the argmax — prevents producing recovered_id >= vocab_size
++        # when all valid entries in the last tile have zero probability.
+         score = prob * inv_q
++        score = tl.where(vocab_mask, score, float("-inf"))
+         local_max, local_id = tl.max(score, axis=0, return_indices=True)
+ 
+         if local_max > max_val:
+             max_val = local_max
+             recovered_id = v + local_id
+ 
++    recovered_id = tl.minimum(recovered_id, vocab_size - 1)
+     tl.store(output_token_ids_ptr + token_idx, recovered_id)
+-- 
+2.43.0
+

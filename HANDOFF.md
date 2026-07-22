@@ -2,20 +2,22 @@
 
 ## Status
 
-This branch packages the validated Gemma 4 confidential-computing production
-candidate. Release `v0.0.21` has been published, measured, attested, and
-revalidated from a clean full-CC enclave.
+This branch packages the security-hardened successor to the validated Gemma 4
+confidential-computing performance candidate. Release `v0.0.21` remains a
+prerelease and must not be promoted: its exact image predates the security
+backports and dependency hardening described below.
 
 | Item | Value |
 |---|---|
 | vLLM base | `v0.23.0` / `0fc695fc6d1d82e9a5ac6835ac8e4e1c83703665` |
-| Candidate | `f49f4a1c5` |
+| Hardened candidate | `21edb0a1e` |
 | Preserved handoff | `52b60ccc7c48b5a36791036fbacd1bcc1911ca8f` |
 | Source branch | `tinfoilsh/vllm-cc-opt:prod/gemma4-cc-v0230-b300-20260722` |
 | Evidence | private `tinfoilsh/vllm-cc-gemma4-lab` repository |
 | Validation host | inf14, NVIDIA B300, full CC enclave |
-| Production release | `v0.0.21` |
-| Production image | `sha256:a19c72bc11dd1a086e55c1e6af701e804e4f8dfeda134a7660105549309e8d9d` |
+| Prior prerelease | `v0.0.21` |
+| Prior image | `sha256:a19c72bc11dd1a086e55c1e6af701e804e4f8dfeda134a7660105549309e8d9d` |
+| Security review | in progress; promotion blocked pending fresh CC validation |
 
 On the B300, stock v0.23.0 reached 569.05 output tokens/second at concurrency
 8. The repaired five-gate candidate produced 891.10, 970.23, and 985.34
@@ -50,10 +52,21 @@ CPU block table. With the gate enabled, the fixed image passed:
 
 ## Promotion Status
 
-The technical promotion gates are complete. Roll out release `v0.0.21` using
-the digest above and the tag-pinned `tinfoil-config.yml`. The private lab
-repository contains the raw release, attestation, correctness, stress, and
-benchmark evidence needed for review.
+Promotion is blocked until the hardened candidate is rebuilt, rescanned,
+attested, and rerun through the clean full-CC correctness, concurrency, no-MTP,
+and performance gates. Do not deploy `v0.0.21`.
+
+Security hardening after the original performance validation includes:
+
+- official vLLM backports for three high-severity advisories;
+- rejection of public structured-output regex constraints, in addition to the
+  upstream compilation timeout;
+- bounds checks before the CC dirty block-table Triton write;
+- strict release source/tag validation and least-privilege workflow defaults;
+- patched OpenSSL, GnuPG, Pillow, MCP, and pyasn1 packages;
+- removal of the unused Mooncake connector; and
+- explicit video disablement plus OpenCV removal until its wheel carries
+  FFmpeg 8.1.2 or newer. Image input remains enabled.
 
 Use `validation/validate_stock_candidate_cc.py` for API comparison. The lab
 repository contains the original harness, result JSON, patch manifest, and the
@@ -61,11 +74,12 @@ remaining investigation plan.
 
 ## Verification Completed
 
-- All 15 deployment patches apply to vLLM v0.23.0 with zero fuzz.
-- Excluding the intentional structured-output patch, the resulting runtime
-  package matches candidate `f49f4a1c5` file for file.
+- The prior 15-patch image applied to vLLM v0.23.0 with zero fuzz.
+- The hardened 20-patch series applies with zero fuzz and matches candidate
+  `21edb0a1e` plus the intentional structured-output patch; runtime and full-CC
+  verification are pending.
 - Shell and Python validation tools pass syntax checks.
 - `docker buildx build --check` resolves the pinned base and reports no
   Dockerfile warnings.
-- The full candidate image built inside a writable full-CC enclave and passed
+- The prior candidate image built inside a writable full-CC enclave and passed
   the correctness, stress, regression, and benchmark suites above.

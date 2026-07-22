@@ -13,8 +13,15 @@ directory with `patch -p1 --fuzz=0`.
 - `0114` coalesces overlapping dirty block-table writes before the Triton
   update kernel. It is the first takeover fix and has passed full-CC validation
   on an NVIDIA B300.
+- `0115` validates dirty-update bounds and rejects malformed negative sampled
+  token IDs.
+- `0116` through `0118` backport the official fixes for
+  `GHSA-8wr5-jm2h-8r4f`, `GHSA-rwxx-mrjm-wc2m`, and
+  `GHSA-33cg-gxv8-3p8g` from vLLM 0.24.0.
+- `0119` lets public deployments reject user-provided regex constraints
+  entirely, in addition to the upstream compilation timeout.
 
-The current takeover candidate is commit `f49f4a1c5`, based on preserved
+The hardened takeover candidate is commit `21edb0a1e`, based on preserved
 handoff commit `52b60ccc7c48b5a36791036fbacd1bcc1911ca8f` and vLLM v0.23.0 commit
 `0fc695fc6d1d82e9a5ac6835ac8e4e1c83703665`.
 
@@ -27,7 +34,11 @@ seven API cases across 70 requests with that gate enabled. Candidate
 oracle comparison, and a 70-request no-MTP control. Raw evidence is in the
 private `tinfoilsh/vllm-cc-gemma4-lab` repository.
 
-## Regenerating 0101-0114
+The security additions require a new image and full-CC regression run. The
+functional results below apply to `f49f4a1c5`; they are the comparison baseline,
+not a security sign-off for `21edb0a1e`.
+
+## Regenerating 0101-0119
 
 From the preserved vLLM checkout:
 
@@ -37,7 +48,7 @@ git format-patch \
   --keep-subject \
   --start-number=101 \
   --output-directory /path/to/confidential-gemma4-31b/patches \
-  v0.23.0..f49f4a1c5 -- vllm
+  v0.23.0..21edb0a1e -- vllm
 ```
 
 The `-- vllm` path restriction intentionally excludes upstream tests from the

@@ -20,5 +20,10 @@ equality with the oracle while request slots are reused.
 installed candidate runtime. It verifies that coalesced destinations are
 disjoint and reproduce the final authoritative CPU block table.
 
+`validate_security_endpoint.py` exercises the public-input trust boundary. It
+expects regex constraints, remote and local-file media, video, and negative
+prompt token IDs to be rejected; checks inline image handling; churns canceled
+streams; and verifies health and canary isolation afterward.
+
 Correctness results must be preserved in `vllm-cc-gemma4-lab`, not committed
 to this deployment repository.

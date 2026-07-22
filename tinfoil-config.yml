@@ -25,10 +25,12 @@ containers:
       - VLLM_CC_DECODE_METADATA_FASTPATH: "1"
       # Patch 0114 passed sequential, concurrent, and no-MTP CC validation.
       - VLLM_CC_BLOCK_TABLE_DIRTY_UPDATE: "1"
+      # Public regex constraints are disabled; JSON schema/choice remain available.
+      - VLLM_DISABLE_STRUCTURED_OUTPUT_REGEX: "1"
     command: ["--model", "/tinfoil/mpk/mpk-d2f38032f5faaa8a45b433157d0f25da1e533cf233784c7438fe9f46d1fbc3f4","--tensor-parallel-size",
       "1", "--gpu-memory-utilization", "0.90", "--served-model-name", "gemma4-31b", "--enable-auto-tool-choice", "--tool-call-parser",
       "gemma4", "--reasoning-parser", "gemma4", "--chat-template", "examples/tool_chat_template_gemma4.jinja", "--scheduling-policy",
-      "priority", "--max-num-seqs", "8", "--speculative-config",
+      "priority", "--max-num-seqs", "8", "--allowed-media-domains", "disabled.invalid", "--limit-mm-per-prompt", "{\"video\":0}", "--speculative-config",
       "{\"method\":\"mtp\",\"model\":\"/tinfoil/mpk/mpk-2d92158d05e976de143bd05ff87977c73523ce6adeff1b559ebf32a2d230d634\",\"num_speculative_tokens\":4}",
       "--port", "8001"]
     tmpfs:
@@ -46,6 +48,7 @@ shim:
   authenticated-endpoints:
     - /v1/chat/completions
     - /v1/responses
+    - /metrics
   paths:
     - /v1/chat/completions
     - /v1/models

@@ -14,17 +14,19 @@ trap 'rm -rf "$temporary_root"' EXIT
 git clone --shared "$source_checkout" "$temporary_root/patched"
 git clone --shared "$source_checkout" "$temporary_root/expected"
 git -C "$temporary_root/patched" checkout --detach v0.23.0
-git -C "$temporary_root/expected" checkout --detach f49f4a1c5
+git -C "$temporary_root/expected" checkout --detach 21edb0a1e
+
+patch -d "$temporary_root/expected" -p1 --no-backup-if-mismatch --fuzz=0 \
+  < "$repo_root/patches/0001-auto-enable-repetition-detection-structured-output.patch"
 
 for patch_file in "$repo_root"/patches/*.patch; do
   patch -d "$temporary_root/patched" -p1 --no-backup-if-mismatch --fuzz=0 \
     < "$patch_file"
 done
 
-diff -ru --exclude=sampling_params.py \
-  "$temporary_root/expected/vllm" "$temporary_root/patched/vllm"
+diff -ru "$temporary_root/expected/vllm" "$temporary_root/patched/vllm"
 
 grep -q '_uses_grammar_constraint' \
   "$temporary_root/patched/vllm/sampling_params.py"
 
-echo "deployment patch series matches vLLM candidate runtime plus patch 0001"
+echo "deployment patch series matches hardened vLLM candidate plus patch 0001"
