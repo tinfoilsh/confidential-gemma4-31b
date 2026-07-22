@@ -1,9 +1,9 @@
 # vLLM v0.25.1 Deployment Patches
 
-These 18 patches apply in filename order to the official vLLM v0.25.1
+These 19 patches apply in filename order to the official vLLM v0.25.1
 Python package. They were generated from
 `tinfoilsh/vllm-cc-opt:milestone/gemma4-cc-v0251-v1-perf-b300-20260722` at
-commit `613cb3f8d7e4b414f2fa341ecd0cdac30b2c4414`.
+commit `f7ccdd059`.
 
 ## Included
 
@@ -27,6 +27,9 @@ commit `613cb3f8d7e4b414f2fa341ecd0cdac30b2c4414`.
   before it reaches the GPU kernels.
 - `0118` registers the deployment gates with vLLM's environment validator;
   this removes misleading unknown-variable warnings without changing behavior.
+- `0119` initializes the v0.25.1 runner's host-staging policy for the ported
+  output and metadata paths. It fixes the missing `pin_memory` attribute found
+  by the first full-CC endpoint request.
 
 ## Removed From v0.23.0
 
@@ -46,5 +49,5 @@ Run:
 validation/verify_patch_series.sh /path/to/vllm-checkout
 ```
 
-The script checks out v0.25.1, applies all 18 patches with zero fuzz, and
+The script checks out v0.25.1, applies all 19 patches with zero fuzz, and
 diffs the result against the source branch commit above.

@@ -1,7 +1,7 @@
 # Validation
 
 `verify_patch_series.sh` applies the deployment patches to exact vLLM v0.25.1
-and compares the runtime package to source commit `613cb3f8d`.
+and compares the runtime package to source commit `f7ccdd059`.
 
 `validate_stock_candidate_cc.py` runs the deterministic seven-case API suite
 against stock and candidate endpoints. Run it inside the benchmark environment
