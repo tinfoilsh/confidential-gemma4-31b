@@ -3,8 +3,8 @@
 ## Status
 
 This branch packages the validated Gemma 4 confidential-computing production
-candidate. Release-image publication and a clean-enclave rerun remain before
-deployment promotion.
+candidate. Release `v0.0.21` has been published, measured, attested, and
+revalidated from a clean full-CC enclave.
 
 | Item | Value |
 |---|---|
@@ -14,7 +14,8 @@ deployment promotion.
 | Source branch | `tinfoilsh/vllm-cc-opt:prod/gemma4-cc-v0230-b300-20260722` |
 | Evidence | private `tinfoilsh/vllm-cc-gemma4-lab` repository |
 | Validation host | inf14, NVIDIA B300, full CC enclave |
-| Candidate image ID | `sha256:04637d3bc136eeff0f5b56685b7640a900c7e27a57242b9d031b661e3a162b95` |
+| Production release | `v0.0.21` |
+| Production image | `sha256:a19c72bc11dd1a086e55c1e6af701e804e4f8dfeda134a7660105549309e8d9d` |
 
 On the B300, stock v0.23.0 reached 569.05 output tokens/second at concurrency
 8. The repaired five-gate candidate produced 891.10, 970.23, and 985.34
@@ -22,12 +23,18 @@ tokens/second in three identical runs, for a 970.23 median and a 70.5% gain
 over stock. At concurrency 16, the candidate produced 993.09 and 972.14
 tokens/second. Every benchmark completed with zero failed requests.
 
-A same-enclave, production-hardened five-run A/B found that
-`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` increased c8 median
-throughput from 875.01 to 956.80 tokens/second, a 9.35% gain. Both arms passed
-70 sequential and 140 concurrent correctness requests. The production config
-therefore retains that allocator override. An earlier non-hardened comparison
-was discarded because container hardening was a confounding variable.
+Sequential same-enclave restarts produced 956-1,015 tokens/second, but those
+runs benefited from warm process/GPU state and are not used as the production
+headline. Clean hardened releases produced 875.01 tokens/second without the
+allocator override and 870.50 with it, which is indistinguishable at the
+observed launch-to-launch variance. The production config conservatively
+retains the long-standing `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`
+setting for allocator behavior, not as a claimed throughput optimization.
+
+The exact `v0.0.21` release passed 70 sequential API requests and 140
+concurrent oracle-checked requests in a fresh full-CC enclave. Its five c8 runs
+ranged from 800.71 to 906.58 output tokens/second with an 870.50 median, 53.0%
+above the matched stock v0.23.0 result of 569.05.
 
 The old `52b60ccc7` image passed 21 sequential requests with dirty updates
 disabled, then failed all seven API cases and became nondeterministic across 70
@@ -41,12 +48,12 @@ CPU block table. With the gate enabled, the fixed image passed:
 - 70 of 70 no-MTP requests; and
 - nine matched MTP load-sweep runs with zero request failures.
 
-## Required Before Release
+## Promotion Status
 
-1. Publish the v0.0.21 release image from this exact branch.
-2. Launch a fresh full-CC enclave from the published digest.
-3. Repeat the deterministic API suite and a matched c8 benchmark.
-4. Record the attested digest and clean-enclave evidence in the lab repository.
+The technical promotion gates are complete. Roll out release `v0.0.21` using
+the digest above and the tag-pinned `tinfoil-config.yml`. The private lab
+repository contains the raw release, attestation, correctness, stress, and
+benchmark evidence needed for review.
 
 Use `validation/validate_stock_candidate_cc.py` for API comparison. The lab
 repository contains the original harness, result JSON, patch manifest, and the
