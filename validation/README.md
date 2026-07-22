@@ -12,6 +12,10 @@ where both endpoints are available; see `--help` for arguments.
 endpoint. It also checks deterministic normalized output and is the preferred
 runner for one-GPU sequential stock/candidate validation.
 
+`stress_endpoint.py` builds a serial oracle for every API case, then shuffles
+the cases across concurrent workers. It checks the absolute expectations and
+equality with the oracle while request slots are reused.
+
 `test_block_table_coalescing.py` runs a randomized property test against the
 installed candidate runtime. It verifies that coalesced destinations are
 disjoint and reproduce the final authoritative CPU block table.
