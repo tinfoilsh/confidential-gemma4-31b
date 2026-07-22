@@ -1,0 +1,1365 @@
+From 99b9455c78356cadf556b4dd800fec2fac2b93de Mon Sep 17 00:00:00 2001
+From: Jules Drean <jules@tinfoil.sh>
+Date: Wed, 24 Jun 2026 04:15:35 -0400
+Subject: cc: add mtp ccbench observability
+
+---
+ vllm/v1/ccbench_instrumentation.py       | 121 +++++++++
+ vllm/v1/core/sched/scheduler.py          |  35 +++
+ vllm/v1/sample/rejection_sampler.py      | 184 ++++++++++---
+ vllm/v1/spec_decode/gemma4.py            |  99 +++++--
+ vllm/v1/spec_decode/llm_base_proposer.py | 286 +++++++++++++-------
+ vllm/v1/worker/gpu_model_runner.py       | 324 ++++++++++++++++++-----
+ 6 files changed, 821 insertions(+), 228 deletions(-)
+ create mode 100644 vllm/v1/ccbench_instrumentation.py
+
+diff --git a/vllm/v1/ccbench_instrumentation.py b/vllm/v1/ccbench_instrumentation.py
+new file mode 100644
+index 000000000..722563f06
+--- /dev/null
++++ b/vllm/v1/ccbench_instrumentation.py
+@@ -0,0 +1,121 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""Optional ccbenchv2 instrumentation helpers.
++
++This module deliberately has no hard dependency on the ccbench runtime. When
++ccbench is absent or disabled, all helpers are no-ops.
++"""
++
++from __future__ import annotations
++
++import contextlib
++import os
++from collections.abc import Iterator
++from typing import Any
++
++_EVENTS: Any | None | bool = None
++
++
++def _is_enabled() -> bool:
++    return bool(os.environ.get("CCBENCHV2_JSONL")) or (
++        os.environ.get("VLLM_CCBENCH_SPEC_INSTRUMENTATION", "0") == "1"
++    )
++
++
++def _events() -> Any | None:
++    global _EVENTS
++    if not _is_enabled():
++        return None
++    if _EVENTS is False:
++        return None
++    if _EVENTS is None:
++        try:
++            from ccbenchv2_runtime import events
++        except Exception:
++            _EVENTS = False
++            return None
++        _EVENTS = events
++    return _EVENTS
++
++
++def _sanitize_value(value: Any) -> Any:
++    if value is None or isinstance(value, (str, int, float, bool)):
++        return value
++    if isinstance(value, (list, tuple)):
++        return [_sanitize_value(item) for item in value[:16]]
++    if isinstance(value, dict):
++        return {
++            str(key): _sanitize_value(item)
++            for key, item in list(value.items())[:16]
++        }
++    return str(value)
++
++
++def _sanitize_attrs(attrs: dict[str, Any] | None) -> dict[str, Any]:
++    if not attrs:
++        return {}
++    return {str(key): _sanitize_value(value) for key, value in attrs.items()}
++
++
++@contextlib.contextmanager
++def ccbench_span(
++    name: str, attrs: dict[str, Any] | None = None
++) -> Iterator[None]:
++    events = _events()
++    if events is None:
++        yield
++        return
++
++    manager = None
++    try:
++        manager = events.span(name, _sanitize_attrs(attrs))
++        manager.__enter__()
++    except Exception:
++        yield
++        return
++
++    try:
++        yield
++    except BaseException as exc:
++        manager.__exit__(type(exc), exc, exc.__traceback__)
++        raise
++    else:
++        manager.__exit__(None, None, None)
++
++
++def ccbench_instant(name: str, attrs: dict[str, Any] | None = None) -> None:
++    events = _events()
++    if events is None:
++        return
++    try:
++        events.get_writer().instant(name, _sanitize_attrs(attrs))
++    except Exception:
++        return
++
++
++def tensor_nbytes(tensor: Any) -> int:
++    try:
++        return int(tensor.numel() * tensor.element_size())
++    except Exception:
++        return 0
++
++
++def tensor_shape(tensor: Any) -> list[int]:
++    try:
++        return [int(dim) for dim in tensor.shape]
++    except Exception:
++        return []
++
++
++def safe_len(value: Any) -> int:
++    try:
++        return int(len(value))
++    except Exception:
++        return 0
++
++
++def safe_sum(value: Any) -> int:
++    try:
++        return int(sum(value))
++    except Exception:
++        return 0
+diff --git a/vllm/v1/core/sched/scheduler.py b/vllm/v1/core/sched/scheduler.py
+index 889232c3e..843b4fc1b 100644
+--- a/vllm/v1/core/sched/scheduler.py
++++ b/vllm/v1/core/sched/scheduler.py
+@@ -30,6 +30,7 @@ from vllm.model_executor.layers.fused_moe.routed_experts_capturer import (
+ from vllm.multimodal import MULTIMODAL_REGISTRY, MultiModalRegistry
+ from vllm.multimodal.encoder_budget import MultiModalBudget
+ from vllm.multimodal.utils import get_mm_features_in_window
++from vllm.v1.ccbench_instrumentation import ccbench_instant
+ from vllm.v1.core.encoder_cache_manager import (
+     EncoderCacheManager,
+     EncoderDecoderCacheManager,
+@@ -946,6 +947,20 @@ class Scheduler(SchedulerInterface):
+             free_encoder_mm_hashes=self.encoder_cache_manager.get_freed_mm_hashes(),
+             new_block_ids_to_zero=new_block_ids_to_zero,
+         )
++        if self.num_spec_tokens > 0:
++            ccbench_instant(
++                "ccbench.spec.scheduler.schedule",
++                {
++                    "num_scheduled_reqs": len(num_scheduled_tokens),
++                    "total_num_scheduled_tokens": total_num_scheduled_tokens,
++                    "num_spec_reqs": len(scheduled_spec_decode_tokens),
++                    "total_scheduled_spec_tokens": sum(
++                        len(tokens) for tokens in scheduled_spec_decode_tokens.values()
++                    ),
++                    "num_new_reqs": len(new_reqs_data),
++                    "num_preempted_reqs": len(preempted_reqs),
++                },
++            )
+ 
+         # NOTE(Kuntai): this function is designed for multiple purposes:
+         # 1. Plan the KV cache store
+@@ -1390,6 +1405,10 @@ class Scheduler(SchedulerInterface):
+         # to avoid expensive operations inside the loop.
+         stopped_running_reqs: set[Request] = set()
+         stopped_preempted_reqs: set[Request] = set()
++        spec_acceptance_reqs = 0
++        spec_acceptance_draft_total = 0
++        spec_acceptance_accepted_total = 0
++        spec_acceptance_rejected_total = 0
+         for req_id, num_tokens_scheduled in num_scheduled_tokens.items():
+             assert num_tokens_scheduled > 0
+             if failed_kv_load_req_ids and req_id in failed_kv_load_req_ids:
+@@ -1429,6 +1448,10 @@ class Scheduler(SchedulerInterface):
+                 # the scheduled spec tokens count and so is similarly adjusted.
+                 if request.num_output_placeholders > 0:
+                     request.num_output_placeholders -= num_rejected
++                spec_acceptance_reqs += 1
++                spec_acceptance_draft_total += num_draft_tokens
++                spec_acceptance_accepted_total += num_accepted
++                spec_acceptance_rejected_total += num_rejected
+                 spec_decoding_stats = self.make_spec_decoding_stats(
+                     spec_decoding_stats,
+                     num_draft_tokens=num_draft_tokens,
+@@ -1571,6 +1594,18 @@ class Scheduler(SchedulerInterface):
+                 # Invariant: EngineCore returns no partial prefill outputs.
+                 assert not prompt_logprobs_tensors
+ 
++        if spec_acceptance_reqs:
++            ccbench_instant(
++                "ccbench.spec.scheduler.acceptance",
++                {
++                    "num_reqs": spec_acceptance_reqs,
++                    "draft_tokens": spec_acceptance_draft_total,
++                    "accepted_tokens": spec_acceptance_accepted_total,
++                    "rejected_tokens": spec_acceptance_rejected_total,
++                    "num_invalid_spec_tokens": scheduler_output.num_invalid_spec_tokens,
++                },
++            )
++
+         # Remove the stopped requests from the running and waiting queues.
+         if stopped_running_reqs:
+             self.running = remove_all(self.running, stopped_running_reqs)
+diff --git a/vllm/v1/sample/rejection_sampler.py b/vllm/v1/sample/rejection_sampler.py
+index 153677e35..35d6d8cc4 100644
+--- a/vllm/v1/sample/rejection_sampler.py
++++ b/vllm/v1/sample/rejection_sampler.py
+@@ -12,6 +12,13 @@ import torch.nn as nn
+ 
+ from vllm.logger import init_logger
+ from vllm.triton_utils import tl, triton
++from vllm.v1.ccbench_instrumentation import (
++    ccbench_span,
++    safe_len,
++    safe_sum,
++    tensor_nbytes,
++    tensor_shape,
++)
+ from vllm.v1.outputs import LogprobsLists, LogprobsTensors, SamplerOutput
+ from vllm.v1.sample.logits_processor.builtin import MinTokensLogitsProcessor
+ from vllm.v1.sample.metadata import SamplingMetadata
+@@ -93,6 +100,47 @@ class RejectionSampler(nn.Module):
+         # [num_tokens + batch_size, vocab_size]
+         logits: torch.Tensor,
+         sampling_metadata: SamplingMetadata,
++    ) -> SamplerOutput:
++        holder = sampling_metadata.thinking_budget_state_holder
++        with ccbench_span(
++            "ccbench.spec.rejection.forward",
++            {
++                "num_reqs": len(metadata.num_draft_tokens),
++                "sum_num_draft_tokens": safe_sum(metadata.num_draft_tokens),
++                "max_spec_len": metadata.max_spec_len,
++                "has_draft_probs": draft_probs is not None,
++                "logits_shape": tensor_shape(logits),
++                "logits_bytes": tensor_nbytes(logits),
++                "has_logprobs": sampling_metadata.max_num_logprobs is not None,
++                "has_penalties": not sampling_metadata.no_penalties,
++                "has_bad_words": bool(sampling_metadata.bad_words_token_ids),
++                "has_thinking": holder is not None
++                and holder.has_tracked_requests(),
++                "has_allowed_token_ids": sampling_metadata.allowed_token_ids_mask
++                is not None,
++                "num_logits_processors": safe_len(
++                    sampling_metadata.logitsprocs.non_argmax_invariant
++                ),
++                "synthetic_mode": self.synthetic_mode,
++                "all_greedy": sampling_metadata.all_greedy,
++                "all_random": sampling_metadata.all_random,
++            },
++        ):
++            return self._forward_impl(
++                metadata,
++                draft_probs,
++                logits,
++                sampling_metadata,
++            )
++
++    def _forward_impl(
++        self,
++        metadata: SpecDecodeMetadata,
++        # [num_tokens, vocab_size]
++        draft_probs: torch.Tensor | None,
++        # [num_tokens + batch_size, vocab_size]
++        logits: torch.Tensor,
++        sampling_metadata: SamplingMetadata,
+     ) -> SamplerOutput:
+         """
+         Args:
+@@ -264,23 +312,34 @@ class RejectionSampler(nn.Module):
+         Returns:
+             A list of lists of token IDs.
+         """
+-        output_token_ids_np = output_token_ids.cpu().numpy()
+-        # Create mask for valid tokens.
+-        valid_mask = (output_token_ids_np != PLACEHOLDER_TOKEN_ID) & (
+-            output_token_ids_np < vocab_size
+-        )
+-        output_logprobs = None
+-        if logprobs_tensors is not None:
+-            cu_num_tokens = [0] + valid_mask.sum(axis=1).cumsum().tolist()
+-            filtered_tensors = logprobs_tensors.filter(valid_mask.flatten())
+-            output_logprobs = filtered_tensors.tolists(cu_num_tokens)
+-
+-        if len(discard_req_indices) > 0:
+-            valid_mask[discard_req_indices] = False
+-        outputs = [
+-            row[valid_mask[i]].tolist() for i, row in enumerate(output_token_ids_np)
+-        ]
+-        return outputs, output_logprobs
++        with ccbench_span(
++            "ccbench.spec.rejection.parse_output",
++            {
++                "output_token_ids_bytes": tensor_nbytes(output_token_ids),
++                "output_token_ids_shape": tensor_shape(output_token_ids),
++                "vocab_size": vocab_size,
++                "discard_req_indices": len(discard_req_indices),
++                "has_logprobs": logprobs_tensors is not None,
++            },
++        ):
++            output_token_ids_np = output_token_ids.cpu().numpy()
++            # Create mask for valid tokens.
++            valid_mask = (output_token_ids_np != PLACEHOLDER_TOKEN_ID) & (
++                output_token_ids_np < vocab_size
++            )
++            output_logprobs = None
++            if logprobs_tensors is not None:
++                cu_num_tokens = [0] + valid_mask.sum(axis=1).cumsum().tolist()
++                filtered_tensors = logprobs_tensors.filter(valid_mask.flatten())
++                output_logprobs = filtered_tensors.tolists(cu_num_tokens)
++
++            if len(discard_req_indices) > 0:
++                valid_mask[discard_req_indices] = False
++            outputs = [
++                row[valid_mask[i]].tolist()
++                for i, row in enumerate(output_token_ids_np)
++            ]
++            return outputs, output_logprobs
+ 
+     def apply_logits_processors(
+         self,
+@@ -311,15 +370,34 @@ class RejectionSampler(nn.Module):
+         )
+         if need_repeat_indices:
+             num_requests = len(metadata.num_draft_tokens)
+-            num_draft_tokens = torch.tensor(metadata.num_draft_tokens, device="cpu")
+-            original_indices = torch.arange(num_requests, device="cpu")
+-            repeat_indices_cpu = original_indices.repeat_interleave(num_draft_tokens)
+-            repeat_indices = repeat_indices_cpu.to(
+-                device=logits.device, non_blocking=True
+-            )
+-            logits = self.apply_penalties(
+-                logits, sampling_metadata, metadata, repeat_indices, output_token_ids
+-            )
++            with ccbench_span(
++                "ccbench.spec.rejection.repeat_indices_h2d",
++                {
++                    "num_reqs": num_requests,
++                    "sum_num_draft_tokens": safe_sum(metadata.num_draft_tokens),
++                    "has_penalties": has_penalties,
++                    "has_thinking": needs_thinking,
++                    "has_allowed_token_ids": sampling_metadata.allowed_token_ids_mask
++                    is not None,
++                },
++            ):
++                num_draft_tokens = torch.tensor(
++                    metadata.num_draft_tokens, device="cpu"
++                )
++                original_indices = torch.arange(num_requests, device="cpu")
++                repeat_indices_cpu = original_indices.repeat_interleave(
++                    num_draft_tokens
++                )
++                repeat_indices = repeat_indices_cpu.to(
++                    device=logits.device, non_blocking=True
++                )
++                logits = self.apply_penalties(
++                    logits,
++                    sampling_metadata,
++                    metadata,
++                    repeat_indices,
++                    output_token_ids,
++                )
+ 
+             # Apply allowed token ids.
+             if sampling_metadata.allowed_token_ids_mask is not None:
+@@ -328,21 +406,49 @@ class RejectionSampler(nn.Module):
+ 
+         # Apply bad words exclusion.
+         if bad_words_token_ids := sampling_metadata.bad_words_token_ids:
+-            apply_bad_words_with_drafts(
+-                logits, bad_words_token_ids, output_token_ids, metadata.num_draft_tokens
+-            )
+-
+-        for processor in sampling_metadata.logitsprocs.non_argmax_invariant:
+-            if isinstance(processor, MinTokensLogitsProcessor):
+-                logits = processor.apply_with_spec_decode(
+-                    logits, metadata.num_draft_tokens
++            with ccbench_span(
++                "ccbench.spec.rejection.bad_words",
++                {
++                    "num_reqs": len(metadata.num_draft_tokens),
++                    "sum_num_draft_tokens": safe_sum(metadata.num_draft_tokens),
++                    "num_bad_word_lists": len(bad_words_token_ids),
++                },
++            ):
++                apply_bad_words_with_drafts(
++                    logits,
++                    bad_words_token_ids,
++                    output_token_ids,
++                    metadata.num_draft_tokens,
+                 )
++
++        processors = sampling_metadata.logitsprocs.non_argmax_invariant
++        if processors:
++            with ccbench_span(
++                "ccbench.spec.rejection.logits_processors",
++                {
++                    "num_processors": len(processors),
++                    "num_reqs": len(metadata.num_draft_tokens),
++                    "sum_num_draft_tokens": safe_sum(metadata.num_draft_tokens),
++                },
++            ):
++                for processor in processors:
++                    if isinstance(processor, MinTokensLogitsProcessor):
++                        logits = processor.apply_with_spec_decode(
++                            logits, metadata.num_draft_tokens
++                        )
+         if holder is not None and holder.has_tracked_requests():
+-            logits = holder.apply_to_logits(
+-                logits,
+-                predict_bonus_token=False,
+-                spec_token_ids=sampling_metadata.spec_token_ids,
+-            )
++            with ccbench_span(
++                "ccbench.spec.rejection.thinking_budget",
++                {
++                    "num_reqs": len(metadata.num_draft_tokens),
++                    "sum_num_draft_tokens": safe_sum(metadata.num_draft_tokens),
++                },
++            ):
++                logits = holder.apply_to_logits(
++                    logits,
++                    predict_bonus_token=False,
++                    spec_token_ids=sampling_metadata.spec_token_ids,
++                )
+         return logits
+ 
+     @staticmethod
+diff --git a/vllm/v1/spec_decode/gemma4.py b/vllm/v1/spec_decode/gemma4.py
+index 7f67ae9f4..a8c69f4ed 100644
+--- a/vllm/v1/spec_decode/gemma4.py
++++ b/vllm/v1/spec_decode/gemma4.py
+@@ -17,6 +17,11 @@ from vllm.config import VllmConfig, get_layers_from_vllm_config, replace
+ from vllm.logger import init_logger
+ from vllm.model_executor.layers.attention_layer_base import AttentionLayerBase
+ from vllm.v1.attention.backend import CommonAttentionMetadata
++from vllm.v1.ccbench_instrumentation import (
++    ccbench_instant,
++    ccbench_span,
++    tensor_shape,
++)
+ from vllm.v1.kv_cache_interface import (
+     KVCacheConfig,
+     KVCacheSpec,
+@@ -79,38 +84,62 @@ class Gemma4Proposer(SpecDecodeBaseProposer):
+         common_attn_metadata whose block_table belongs to one group.
+         We swap in the correct block table for each draft attention group.
+         """
+-        per_group_attn_metadata: list[object] = []
+-        per_layer_attn_metadata: dict[str, object] = {}
+         batch_size = common_attn_metadata.batch_size()
+-        for attn_group in self.draft_attn_groups:
+-            gid = attn_group.kv_cache_group_id
+-            if gid in self._per_group_block_tables:
+-                cm = copy(common_attn_metadata)
+-                # Slice to actual batch size to match cu_seqlens_q dimension.
+-                # The stored block tables may be padded (num_reqs_padded) from
+-                # the target forward pass, but the drafter operates on the
+-                # unpadded batch.
+-                cm.block_table_tensor = self._per_group_block_tables[gid][:batch_size]
+-            else:
+-                cm = common_attn_metadata
+-            attn_metadata = attn_group.get_metadata_builder().build_for_drafting(
+-                common_attn_metadata=cm, draft_index=draft_index
+-            )
+-            per_group_attn_metadata.append(attn_metadata)
+-            for layer_name in attn_group.layer_names:
+-                per_layer_attn_metadata[layer_name] = attn_metadata
+-        return per_group_attn_metadata, per_layer_attn_metadata
++        with ccbench_span(
++            "ccbench.spec.gemma4.attn_metadata",
++            {
++                "draft_index": draft_index,
++                "batch_size": batch_size,
++                "num_draft_attn_groups": len(self.draft_attn_groups),
++                "num_per_group_block_tables": len(self._per_group_block_tables),
++                "query_start_loc_shape": tensor_shape(
++                    common_attn_metadata.query_start_loc
++                ),
++                "block_table_shape": tensor_shape(
++                    common_attn_metadata.block_table_tensor
++                ),
++            },
++        ):
++            per_group_attn_metadata: list[object] = []
++            per_layer_attn_metadata: dict[str, object] = {}
++            for attn_group in self.draft_attn_groups:
++                gid = attn_group.kv_cache_group_id
++                if gid in self._per_group_block_tables:
++                    cm = copy(common_attn_metadata)
++                    # Slice to actual batch size to match cu_seqlens_q dimension.
++                    # The stored block tables may be padded (num_reqs_padded) from
++                    # the target forward pass, but the drafter operates on the
++                    # unpadded batch.
++                    cm.block_table_tensor = self._per_group_block_tables[gid][
++                        :batch_size
++                    ]
++                else:
++                    cm = common_attn_metadata
++                attn_metadata = attn_group.get_metadata_builder().build_for_drafting(
++                    common_attn_metadata=cm, draft_index=draft_index
++                )
++                per_group_attn_metadata.append(attn_metadata)
++                for layer_name in attn_group.layer_names:
++                    per_layer_attn_metadata[layer_name] = attn_metadata
++            return per_group_attn_metadata, per_layer_attn_metadata
+ 
+     def _greedy_sample(self, hidden_states: torch.Tensor) -> torch.Tensor:
+-        if self._centroids_sizes:
+-            T = hidden_states.shape[0]
+-            for size in self._centroids_sizes:
+-                if size >= T:
+-                    self._centroids_inputs[size][:T].copy_(hidden_states)
+-                    self._centroids_graphs[size].replay()
+-                    return self._centroids_outputs[size][:T].clone()
+-            return self.model.get_top_tokens(hidden_states)
+-        return super()._greedy_sample(hidden_states)
++        with ccbench_span(
++            "ccbench.spec.gemma4.greedy_sample",
++            {
++                "hidden_states_shape": tensor_shape(hidden_states),
++                "centroids_graph_count": len(self._centroids_sizes),
++            },
++        ):
++            if self._centroids_sizes:
++                T = hidden_states.shape[0]
++                for size in self._centroids_sizes:
++                    if size >= T:
++                        self._centroids_inputs[size][:T].copy_(hidden_states)
++                        self._centroids_graphs[size].replay()
++                        return self._centroids_outputs[size][:T].clone()
++                return self.model.get_top_tokens(hidden_states)
++            return super()._greedy_sample(hidden_states)
+ 
+     def _setup_centroids_cuda_graphs(self) -> None:
+         """Capture CUDA graphs for centroids get_top_tokens at key sizes."""
+@@ -308,6 +337,7 @@ class Gemma4Proposer(SpecDecodeBaseProposer):
+                 break
+ 
+         draft_layer_types = getattr(draft_text_config, "layer_types", [])
++        mapped_layers = 0
+         for draft_idx, layer in enumerate(self.model.model.layers):
+             if not hasattr(layer, "self_attn"):
+                 continue
+@@ -332,9 +362,20 @@ class Gemma4Proposer(SpecDecodeBaseProposer):
+             target_idx = candidates[-1]
+             target_layer_name = f"{target_prefix}.{target_idx}.self_attn.attn"
+             attn.kv_sharing_target_layer_name = target_layer_name
++            mapped_layers += 1
+             logger.info(
+                 "Gemma4 MTP: draft layer %d (%s) -> %s",
+                 draft_idx,
+                 draft_layer_type,
+                 target_layer_name,
+             )
++        ccbench_instant(
++            "ccbench.spec.gemma4.kv_sharing",
++            {
++                "mapped_layers": mapped_layers,
++                "draft_layers": len(getattr(self.model.model, "layers", [])),
++                "target_num_kv_shared": target_num_kv_shared,
++                "target_layer_types": sorted(set(target_layer_types)),
++                "draft_layer_types": sorted(set(draft_layer_types)),
++            },
++        )
+diff --git a/vllm/v1/spec_decode/llm_base_proposer.py b/vllm/v1/spec_decode/llm_base_proposer.py
+index 74b3e39cb..b1c69a58f 100644
+--- a/vllm/v1/spec_decode/llm_base_proposer.py
++++ b/vllm/v1/spec_decode/llm_base_proposer.py
+@@ -29,6 +29,11 @@ from vllm.utils.platform_utils import prefer_pinned
+ from vllm.v1.attention.backend import CommonAttentionMetadata
+ from vllm.v1.attention.backends.registry import AttentionBackendEnum
+ from vllm.v1.attention.backends.triton_attn import TritonAttentionMetadata
++from vllm.v1.ccbench_instrumentation import (
++    ccbench_span,
++    tensor_nbytes,
++    tensor_shape,
++)
+ from vllm.v1.cudagraph_dispatcher import CudagraphDispatcher
+ from vllm.v1.kv_cache_interface import KVCacheConfig, UniformTypeKVCacheSpecs
+ from vllm.v1.sample.metadata import SamplingMetadata
+@@ -468,21 +473,42 @@ class SpecDecodeBaseProposer:
+             )
+             assert target_hidden_states.shape[-1] == self.hidden_size
+ 
+-        num_tokens, token_indices_to_sample, common_attn_metadata = (
+-            self.set_inputs_first_pass(
+-                target_token_ids=target_token_ids,
+-                next_token_ids=next_token_ids,
+-                target_positions=target_positions,
+-                target_hidden_states=target_hidden_states,
+-                token_indices_to_sample=token_indices_to_sample,
+-                cad=common_attn_metadata,
+-                num_rejected_tokens_gpu=num_rejected_tokens_gpu,
++        with ccbench_span(
++            "ccbench.spec.draft.set_inputs_first_pass",
++            {
++                "method": self.method,
++                "batch_size": batch_size,
++                "target_token_ids_shape": tensor_shape(target_token_ids),
++                "target_hidden_states_shape": tensor_shape(target_hidden_states),
++                "next_token_ids_shape": tensor_shape(next_token_ids),
++                "needs_extra_input_slots": self.needs_extra_input_slots,
++                "parallel_drafting": self.parallel_drafting,
++            },
++        ):
++            num_tokens, token_indices_to_sample, common_attn_metadata = (
++                self.set_inputs_first_pass(
++                    target_token_ids=target_token_ids,
++                    next_token_ids=next_token_ids,
++                    target_positions=target_positions,
++                    target_hidden_states=target_hidden_states,
++                    token_indices_to_sample=token_indices_to_sample,
++                    cad=common_attn_metadata,
++                    num_rejected_tokens_gpu=num_rejected_tokens_gpu,
++                )
+             )
+-        )
+ 
+-        per_group_attn_metadata, per_layer_attn_metadata = (
+-            self.build_per_group_and_layer_attn_metadata(common_attn_metadata)
+-        )
++        with ccbench_span(
++            "ccbench.spec.draft.attn_metadata.first_pass",
++            {
++                "method": self.method,
++                "batch_size": batch_size,
++                "num_tokens": num_tokens,
++                "num_draft_attn_groups": len(self.draft_attn_groups),
++            },
++        ):
++            per_group_attn_metadata, per_layer_attn_metadata = (
++                self.build_per_group_and_layer_attn_metadata(common_attn_metadata)
++            )
+ 
+         cudagraph_runtime_mode, num_input_tokens, num_tokens_across_dp = (
+             self._determine_batch_execution_and_padding(num_tokens)
+@@ -497,22 +523,34 @@ class SpecDecodeBaseProposer:
+         if self._share_mtp_indices and hasattr(self.model.model, "set_skip_topk"):
+             self.model.model.set_skip_topk(False)
+ 
+-        with set_forward_context(
+-            per_layer_attn_metadata,
+-            self.vllm_config,
+-            num_tokens=num_input_tokens,
+-            num_tokens_across_dp=num_tokens_across_dp,
+-            cudagraph_runtime_mode=cudagraph_runtime_mode,
+-            slot_mapping=self._get_slot_mapping(
+-                slot_mapping_size, common_attn_metadata.slot_mapping
+-            ),
++        with ccbench_span(
++            "ccbench.spec.draft.forward.first_pass",
++            {
++                "method": self.method,
++                "batch_size": batch_size,
++                "num_tokens": num_tokens,
++                "num_input_tokens": num_input_tokens,
++                "num_tokens_across_dp": num_tokens_across_dp,
++                "cudagraph_runtime_mode": str(cudagraph_runtime_mode),
++                "slot_mapping_size": slot_mapping_size,
++            },
+         ):
+-            ret_hidden_states = self.model(**model_kwargs)
+-            if not self.model_returns_tuple():
+-                last_hidden_states = ret_hidden_states
+-                hidden_states = last_hidden_states
+-            else:
+-                last_hidden_states, hidden_states = ret_hidden_states
++            with set_forward_context(
++                per_layer_attn_metadata,
++                self.vllm_config,
++                num_tokens=num_input_tokens,
++                num_tokens_across_dp=num_tokens_across_dp,
++                cudagraph_runtime_mode=cudagraph_runtime_mode,
++                slot_mapping=self._get_slot_mapping(
++                    slot_mapping_size, common_attn_metadata.slot_mapping
++                ),
++            ):
++                ret_hidden_states = self.model(**model_kwargs)
++                if not self.model_returns_tuple():
++                    last_hidden_states = ret_hidden_states
++                    hidden_states = last_hidden_states
++                else:
++                    last_hidden_states, hidden_states = ret_hidden_states
+ 
+         # After step 0: switch to reuse mode so steps 1+ skip the indexer
+         # and read the indices that step 0 just wrote into the shared buffer.
+@@ -604,11 +642,20 @@ class SpecDecodeBaseProposer:
+             # (e.g. Gemma4 MTP), common_attn_metadata is invariant across
+             # loop iterations so we build once and reuse.
+             if not self.constant_draft_positions or token_index == 0:
+-                _, per_layer_attn_metadata = (
+-                    self.build_per_group_and_layer_attn_metadata(
+-                        common_attn_metadata, draft_index=token_index + 1
++                with ccbench_span(
++                    "ccbench.spec.draft.attn_metadata.loop",
++                    {
++                        "method": self.method,
++                        "batch_size": batch_size,
++                        "draft_index": token_index + 1,
++                        "constant_draft_positions": self.constant_draft_positions,
++                    },
++                ):
++                    _, per_layer_attn_metadata = (
++                        self.build_per_group_and_layer_attn_metadata(
++                            common_attn_metadata, draft_index=token_index + 1
++                        )
+                     )
+-                )
+ 
+             # copy inputs to buffer for cudagraph
+             self.input_ids[:batch_size] = input_ids
+@@ -631,20 +678,32 @@ class SpecDecodeBaseProposer:
+             if self.pass_hidden_states_to_model:
+                 model_kwargs["hidden_states"] = self.hidden_states[:input_batch_size]
+ 
+-            with set_forward_context(
+-                per_layer_attn_metadata,
+-                self.vllm_config,
+-                num_tokens=input_batch_size,
+-                num_tokens_across_dp=batch_size_across_dp,
+-                cudagraph_runtime_mode=cudagraph_runtime_mode,
+-                slot_mapping=self._get_slot_mapping(input_batch_size),
++            with ccbench_span(
++                "ccbench.spec.draft.forward.loop",
++                {
++                    "method": self.method,
++                    "batch_size": batch_size,
++                    "draft_index": token_index + 1,
++                    "input_batch_size": input_batch_size,
++                    "batch_size_across_dp": batch_size_across_dp,
++                    "constant_draft_positions": self.constant_draft_positions,
++                    "cudagraph_runtime_mode": str(cudagraph_runtime_mode),
++                },
+             ):
+-                ret_hidden_states = self.model(**model_kwargs)
+-                if not self.model_returns_tuple():
+-                    last_hidden_states = ret_hidden_states
+-                    hidden_states = ret_hidden_states
+-                else:
+-                    last_hidden_states, hidden_states = ret_hidden_states
++                with set_forward_context(
++                    per_layer_attn_metadata,
++                    self.vllm_config,
++                    num_tokens=input_batch_size,
++                    num_tokens_across_dp=batch_size_across_dp,
++                    cudagraph_runtime_mode=cudagraph_runtime_mode,
++                    slot_mapping=self._get_slot_mapping(input_batch_size),
++                ):
++                    ret_hidden_states = self.model(**model_kwargs)
++                    if not self.model_returns_tuple():
++                        last_hidden_states = ret_hidden_states
++                        hidden_states = ret_hidden_states
++                    else:
++                        last_hidden_states, hidden_states = ret_hidden_states
+ 
+             hidden_states = hidden_states[:batch_size]
+             draft_token_ids, draft_probs = self._sample_draft_tokens(
+@@ -944,11 +1003,23 @@ class SpecDecodeBaseProposer:
+         """
+         # Precompute backup token IDs for discarded requests.
+         num_reqs = gpu_input_batch.num_reqs
+-        for i in range(num_reqs):
+-            self.backup_next_token_ids.np[i] = requests[
+-                gpu_input_batch.req_ids[i]
+-            ].get_token_id(gpu_input_batch.num_tokens_no_spec[i] - 1)
+-        self.backup_next_token_ids.copy_to_gpu(num_reqs)
++        with ccbench_span(
++            "ccbench.spec.draft.prepare_next_token_ids.backup_h2d",
++            {
++                "method": self.method,
++                "num_reqs": num_reqs,
++                "backup_next_token_ids_bytes": int(
++                    num_reqs * self.backup_next_token_ids.gpu.element_size()
++                ),
++                "sampled_token_ids_shape": tensor_shape(sampled_token_ids),
++                "sampled_token_ids_bytes": tensor_nbytes(sampled_token_ids),
++            },
++        ):
++            for i in range(num_reqs):
++                self.backup_next_token_ids.np[i] = requests[
++                    gpu_input_batch.req_ids[i]
++                ].get_token_id(gpu_input_batch.num_tokens_no_spec[i] - 1)
++            self.backup_next_token_ids.copy_to_gpu(num_reqs)
+         backup_tokens_gpu = self.backup_next_token_ids.gpu
+ 
+         batch_size, num_tokens = sampled_token_ids.shape
+@@ -965,18 +1036,27 @@ class SpecDecodeBaseProposer:
+ 
+         # Find the next power of 2 for block sizes
+         BLOCK_SIZE_TOKENS = next_power_of_2(num_tokens)
+-        eagle_prepare_next_token_padded_kernel[grid](
+-            sampled_token_ids,
+-            discard_request_mask,
+-            backup_tokens_gpu,
+-            next_token_ids,
+-            valid_sampled_tokens_count,
+-            gpu_input_batch.vocab_size,
+-            num_tokens,
+-            batch_size,
+-            sampled_token_ids.stride(0),
+-            BLOCK_SIZE_TOKENS=BLOCK_SIZE_TOKENS,
+-        )
++        with ccbench_span(
++            "ccbench.spec.draft.prepare_next_token_ids.kernel",
++            {
++                "method": self.method,
++                "batch_size": batch_size,
++                "num_tokens": num_tokens,
++                "block_size_tokens": BLOCK_SIZE_TOKENS,
++            },
++        ):
++            eagle_prepare_next_token_padded_kernel[grid](
++                sampled_token_ids,
++                discard_request_mask,
++                backup_tokens_gpu,
++                next_token_ids,
++                valid_sampled_tokens_count,
++                gpu_input_batch.vocab_size,
++                num_tokens,
++                batch_size,
++                sampled_token_ids.stride(0),
++                BLOCK_SIZE_TOKENS=BLOCK_SIZE_TOKENS,
++            )
+ 
+         return next_token_ids, valid_sampled_tokens_count
+ 
+@@ -1005,36 +1085,60 @@ class SpecDecodeBaseProposer:
+         )
+ 
+         grid = (num_reqs,)
+-        eagle_prepare_inputs_padded_kernel[grid](
+-            spec_decode_metadata.cu_num_draft_tokens,
+-            valid_sampled_tokens_count,
+-            common_attn_metadata.query_start_loc,
+-            token_indices_to_sample,
+-            num_rejected_tokens_gpu,
+-            num_reqs,
+-        )
+-
+-        query_start_loc_cpu = common_attn_metadata.query_start_loc_cpu
+-        new_query_len_per_req = query_start_loc_cpu[1:] - query_start_loc_cpu[:-1]
+-
+-        total_num_tokens = query_start_loc_cpu[-1].item()
++        with ccbench_span(
++            "ccbench.spec.draft.prepare_inputs_padded.kernel",
++            {
++                "method": self.method,
++                "num_reqs": num_reqs,
++                "sum_num_draft_tokens": sum(spec_decode_metadata.num_draft_tokens),
++                "valid_sampled_count_shape": tensor_shape(
++                    valid_sampled_tokens_count
++                ),
++                "query_start_loc_shape": tensor_shape(
++                    common_attn_metadata.query_start_loc
++                ),
++            },
++        ):
++            eagle_prepare_inputs_padded_kernel[grid](
++                spec_decode_metadata.cu_num_draft_tokens,
++                valid_sampled_tokens_count,
++                common_attn_metadata.query_start_loc,
++                token_indices_to_sample,
++                num_rejected_tokens_gpu,
++                num_reqs,
++            )
+ 
+-        spec_common_attn_metadata = CommonAttentionMetadata(
+-            query_start_loc=common_attn_metadata.query_start_loc,
+-            seq_lens=common_attn_metadata.seq_lens,
+-            query_start_loc_cpu=query_start_loc_cpu,
+-            _seq_lens_cpu=common_attn_metadata._seq_lens_cpu,
+-            _num_computed_tokens_cpu=common_attn_metadata._num_computed_tokens_cpu,
+-            seq_lens_cpu_upper_bound=common_attn_metadata.seq_lens_cpu_upper_bound,
+-            num_reqs=common_attn_metadata.num_reqs,
+-            num_actual_tokens=total_num_tokens,
+-            max_query_len=new_query_len_per_req.max().item(),
+-            max_seq_len=common_attn_metadata.max_seq_len,
+-            block_table_tensor=common_attn_metadata.block_table_tensor,
+-            slot_mapping=common_attn_metadata.slot_mapping[:total_num_tokens],
+-            causal=True,
+-            dcp_local_seq_lens=common_attn_metadata.dcp_local_seq_lens,
+-        )
++        with ccbench_span(
++            "ccbench.spec.draft.prepare_inputs_padded.cpu_metadata",
++            {
++                "method": self.method,
++                "num_reqs": num_reqs,
++                "query_start_loc_cpu_len": len(
++                    common_attn_metadata.query_start_loc_cpu
++                ),
++            },
++        ):
++            query_start_loc_cpu = common_attn_metadata.query_start_loc_cpu
++            new_query_len_per_req = query_start_loc_cpu[1:] - query_start_loc_cpu[:-1]
++
++            total_num_tokens = query_start_loc_cpu[-1].item()
++
++            spec_common_attn_metadata = CommonAttentionMetadata(
++                query_start_loc=common_attn_metadata.query_start_loc,
++                seq_lens=common_attn_metadata.seq_lens,
++                query_start_loc_cpu=query_start_loc_cpu,
++                _seq_lens_cpu=common_attn_metadata._seq_lens_cpu,
++                _num_computed_tokens_cpu=common_attn_metadata._num_computed_tokens_cpu,
++                seq_lens_cpu_upper_bound=common_attn_metadata.seq_lens_cpu_upper_bound,
++                num_reqs=common_attn_metadata.num_reqs,
++                num_actual_tokens=total_num_tokens,
++                max_query_len=new_query_len_per_req.max().item(),
++                max_seq_len=common_attn_metadata.max_seq_len,
++                block_table_tensor=common_attn_metadata.block_table_tensor,
++                slot_mapping=common_attn_metadata.slot_mapping[:total_num_tokens],
++                causal=True,
++                dcp_local_seq_lens=common_attn_metadata.dcp_local_seq_lens,
++            )
+ 
+         return (
+             spec_common_attn_metadata,
+diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
+index ca4ffad83..d839298f8 100644
+--- a/vllm/v1/worker/gpu_model_runner.py
++++ b/vllm/v1/worker/gpu_model_runner.py
+@@ -139,6 +139,13 @@ from vllm.v1.attention.backends.utils import (
+     get_dcp_local_seq_lens,
+     reorder_batch_to_split_decodes_and_prefills,
+ )
++from vllm.v1.ccbench_instrumentation import (
++    ccbench_instant,
++    ccbench_span,
++    safe_sum,
++    tensor_nbytes,
++    tensor_shape,
++)
+ from vllm.v1.core.sched.output import NewRequestData
+ from vllm.v1.cudagraph_dispatcher import CudagraphDispatcher
+ from vllm.v1.kv_cache_interface import (
+@@ -423,6 +430,16 @@ class CCOutputPublicationWorker:
+         logprobs_tensors: LogprobsTensors | None,
+         routed_experts: RoutedExpertsTensors | None,
+     ) -> CCOutputPublication:
++        ccbench_instant(
++            "ccbench.output.worker.submit",
++            {
++                "sampled_token_ids_bytes": tensor_nbytes(sampled_token_ids),
++                "sampled_token_ids_shape": tensor_shape(sampled_token_ids),
++                "has_logprobs": logprobs_tensors is not None,
++                "has_routed_experts": routed_experts is not None,
++                "pin_memory": self.pin_memory,
++            },
++        )
+         ready_event = torch.Event()
+         ready_event.record(torch.cuda.current_stream())
+         publication = CCOutputPublication()
+@@ -458,21 +475,35 @@ class CCOutputPublicationWorker:
+             if task is None:
+                 return
+             try:
+-                task.ready_event.synchronize()
+-                with torch.cuda.stream(copy_stream):
+-                    result = CCOutputPublicationResult(
+-                        sampled_token_ids_cpu=_copy_tensor_to_cpu_nonblocking(
+-                            task.sampled_token_ids, self.pin_memory
+-                        ),
+-                        logprobs_tensors_cpu=_copy_logprobs_to_cpu_nonblocking(
+-                            task.logprobs_tensors, self.pin_memory
++                with ccbench_span(
++                    "ccbench.output.worker.copy",
++                    {
++                        "sampled_token_ids_bytes": tensor_nbytes(
++                            task.sampled_token_ids
+                         ),
+-                        routed_experts_cpu=_copy_routed_experts_to_cpu_nonblocking(
+-                            task.routed_experts, self.pin_memory
++                        "sampled_token_ids_shape": tensor_shape(
++                            task.sampled_token_ids
+                         ),
+-                    )
+-                copy_stream.synchronize()
+-                task.publication.set_result(result)
++                        "has_logprobs": task.logprobs_tensors is not None,
++                        "has_routed_experts": task.routed_experts is not None,
++                        "pin_memory": self.pin_memory,
++                    },
++                ):
++                    task.ready_event.synchronize()
++                    with torch.cuda.stream(copy_stream):
++                        result = CCOutputPublicationResult(
++                            sampled_token_ids_cpu=_copy_tensor_to_cpu_nonblocking(
++                                task.sampled_token_ids, self.pin_memory
++                            ),
++                            logprobs_tensors_cpu=_copy_logprobs_to_cpu_nonblocking(
++                                task.logprobs_tensors, self.pin_memory
++                            ),
++                            routed_experts_cpu=_copy_routed_experts_to_cpu_nonblocking(
++                                task.routed_experts, self.pin_memory
++                            ),
++                        )
++                    copy_stream.synchronize()
++                    task.publication.set_result(result)
+             except BaseException as exc:
+                 task.publication.set_error(exc)
+ 
+@@ -491,7 +522,8 @@ class AsyncGPUWorkerModelRunnerOutput(AsyncModelRunnerOutput):
+         self.vocab_size = vocab_size
+ 
+     def get_output(self) -> ModelRunnerOutput:
+-        result = self._publication.result()
++        with ccbench_span("ccbench.output.worker.result"):
++            result = self._publication.result()
+         sampled_token_ids_cpu = result.sampled_token_ids_cpu
+         max_gen_len = sampled_token_ids_cpu.shape[-1]
+ 
+@@ -916,6 +948,35 @@ class GPUModelRunner(
+         if self.cc_output_worker_enabled:
+             logger.info("Using experimental CC output publication worker.")
+         self._cc_output_publication_worker: CCOutputPublicationWorker | None = None
++        if self.speculative_config is not None or self.cc_output_worker_enabled:
++            draft_config = (
++                self.speculative_config.draft_model_config
++                if self.speculative_config is not None
++                else None
++            )
++            ccbench_instant(
++                "ccbench.spec.config",
++                {
++                    "method": getattr(self.speculative_config, "method", None),
++                    "num_speculative_tokens": self.num_spec_tokens,
++                    "use_async_scheduling": self.use_async_scheduling,
++                    "use_async_spec_decode": self.use_async_spec_decode,
++                    "disable_padded_drafter_batch": getattr(
++                        self.speculative_config,
++                        "disable_padded_drafter_batch",
++                        None,
++                    ),
++                    "draft_model": getattr(draft_config, "model", None),
++                    "drafter_class": type(getattr(self, "drafter", None)).__name__,
++                    "is_gemma4_mtp": bool(
++                        self.speculative_config
++                        and self.speculative_config.use_gemma4_mtp()
++                    ),
++                    "cc_output_worker_enabled": self.cc_output_worker_enabled,
++                    "cc_decode_metadata_fastpath": self.cc_decode_metadata_fastpath,
++                    "pin_memory": self.pin_memory,
++                },
++            )
+ 
+         # self.cudagraph_batch_sizes sorts in ascending order.
+         if (
+@@ -3166,26 +3227,56 @@ class GPUModelRunner(
+         target_logits_indices += self._arange_scratch[: cu_num_draft_tokens[-1]]
+ 
+         # TODO: Optimize the CPU -> GPU copy.
+-        cu_num_draft_tokens = torch.from_numpy(cu_num_draft_tokens).to(
+-            self.device, non_blocking=True
+-        )
+-        cu_num_sampled_tokens = torch.from_numpy(cu_num_sampled_tokens).to(
+-            self.device, non_blocking=True
+-        )
+-        logits_indices = torch.from_numpy(logits_indices).to(
+-            self.device, non_blocking=True
+-        )
+-        target_logits_indices = torch.from_numpy(target_logits_indices).to(
+-            self.device, non_blocking=True
+-        )
+-        bonus_logits_indices = torch.from_numpy(bonus_logits_indices).to(
+-            self.device, non_blocking=True
+-        )
++        with ccbench_span(
++            "ccbench.spec.metadata.h2d",
++            {
++                "num_reqs": int(num_draft_tokens.shape[0]),
++                "sum_num_draft_tokens": int(num_draft_tokens.sum()),
++                "max_num_draft_tokens": int(num_draft_tokens.max())
++                if num_draft_tokens.size
++                else 0,
++                "sum_num_sampled_tokens": int(num_sampled_tokens.sum()),
++                "cu_num_draft_tokens_bytes": int(cu_num_draft_tokens.nbytes),
++                "cu_num_sampled_tokens_bytes": int(cu_num_sampled_tokens.nbytes),
++                "logits_indices_bytes": int(logits_indices.nbytes),
++                "target_logits_indices_bytes": int(target_logits_indices.nbytes),
++                "bonus_logits_indices_bytes": int(bonus_logits_indices.nbytes),
++                "total_h2d_bytes": int(
++                    cu_num_draft_tokens.nbytes
++                    + cu_num_sampled_tokens.nbytes
++                    + logits_indices.nbytes
++                    + target_logits_indices.nbytes
++                    + bonus_logits_indices.nbytes
++                ),
++            },
++        ):
++            cu_num_draft_tokens = torch.from_numpy(cu_num_draft_tokens).to(
++                self.device, non_blocking=True
++            )
++            cu_num_sampled_tokens = torch.from_numpy(cu_num_sampled_tokens).to(
++                self.device, non_blocking=True
++            )
++            logits_indices = torch.from_numpy(logits_indices).to(
++                self.device, non_blocking=True
++            )
++            target_logits_indices = torch.from_numpy(target_logits_indices).to(
++                self.device, non_blocking=True
++            )
++            bonus_logits_indices = torch.from_numpy(bonus_logits_indices).to(
++                self.device, non_blocking=True
++            )
+ 
+         # Compute the draft token ids.
+         # draft_token_indices:      [  1,   2,   3, 105, 106, 208]
+-        draft_token_ids = self.input_ids.gpu[logits_indices]
+-        draft_token_ids = draft_token_ids[target_logits_indices + 1]
++        with ccbench_span(
++            "ccbench.spec.metadata.draft_token_ids",
++            {
++                "logits_indices_shape": tensor_shape(logits_indices),
++                "target_logits_indices_shape": tensor_shape(target_logits_indices),
++            },
++        ):
++            draft_token_ids = self.input_ids.gpu[logits_indices]
++            draft_token_ids = draft_token_ids[target_logits_indices + 1]
+ 
+         return SpecDecodeMetadata(
+             draft_token_ids=draft_token_ids,
+@@ -3938,15 +4029,36 @@ class GPUModelRunner(
+         # output_token_ids is needed (penalties or bad_words are in use).
+         if self.use_async_scheduling and self._draft_token_req_ids is not None:
+             draft_token_ids_cpu, _ = self._get_draft_token_ids_cpu()
+-            self.input_batch.update_async_spec_token_ids(draft_token_ids_cpu)
++            with ccbench_span(
++                "ccbench.spec.update_async_spec_token_ids",
++                {"num_reqs": len(draft_token_ids_cpu)},
++            ):
++                self.input_batch.update_async_spec_token_ids(draft_token_ids_cpu)
+ 
+         draft_probs = self._get_spec_decode_draft_probs(spec_decode_metadata)
+-        sampler_output = self.rejection_sampler(
+-            spec_decode_metadata,
+-            draft_probs,
+-            logits,
+-            sampling_metadata,
+-        )
++        with ccbench_span(
++            "ccbench.spec.rejection",
++            {
++                "num_reqs": len(spec_decode_metadata.num_draft_tokens),
++                "sum_num_draft_tokens": safe_sum(
++                    spec_decode_metadata.num_draft_tokens
++                ),
++                "max_spec_len": spec_decode_metadata.max_spec_len,
++                "has_draft_probs": draft_probs is not None,
++                "requires_cpu_output_token_history": getattr(
++                    sampling_metadata, "requires_cpu_output_token_history", None
++                ),
++                "has_bad_words": bool(sampling_metadata.bad_words_token_ids),
++                "has_allowed_token_ids": sampling_metadata.allowed_token_ids_mask
++                is not None,
++            },
++        ):
++            sampler_output = self.rejection_sampler(
++                spec_decode_metadata,
++                draft_probs,
++                logits,
++                sampling_metadata,
++            )
+         return sampler_output
+ 
+     def _bookkeeping_sync(
+@@ -4832,17 +4944,29 @@ class GPUModelRunner(
+         def propose_draft_token_ids(sampled_token_ids):
+             assert spec_decode_common_attn_metadata is not None
+             with record_function_or_nullcontext("gpu_model_runner: draft"):
+-                self._draft_token_ids = self.propose_draft_token_ids(
+-                    scheduler_output,
+-                    sampled_token_ids,
+-                    self.input_batch.sampling_metadata,
+-                    hidden_states,
+-                    sample_hidden_states,
+-                    aux_hidden_states,
+-                    spec_decode_metadata,
+-                    spec_decode_common_attn_metadata,
+-                    slot_mappings,
+-                )
++                with ccbench_span(
++                    "ccbench.spec.draft.propose",
++                    {
++                        "method": getattr(spec_config, "method", None),
++                        "drafter_class": type(self.drafter).__name__,
++                        "num_reqs": self.input_batch.num_reqs,
++                        "total_num_scheduled_tokens": scheduler_output.total_num_scheduled_tokens,
++                        "sampled_token_ids_shape": tensor_shape(sampled_token_ids),
++                        "sampled_token_ids_type": type(sampled_token_ids).__name__,
++                        "has_spec_decode_metadata": spec_decode_metadata is not None,
++                    },
++                ):
++                    self._draft_token_ids = self.propose_draft_token_ids(
++                        scheduler_output,
++                        sampled_token_ids,
++                        self.input_batch.sampling_metadata,
++                        hidden_states,
++                        sample_hidden_states,
++                        aux_hidden_states,
++                        spec_decode_metadata,
++                        spec_decode_common_attn_metadata,
++                        slot_mappings,
++                    )
+                 self._copy_draft_token_ids_to_cpu(scheduler_output)
+ 
+         spec_config = self.speculative_config
+@@ -5109,29 +5233,67 @@ class GPUModelRunner(
+             scheduler_output.has_structured_output_requests
+             or self.input_batch.sampling_metadata.requires_cpu_output_token_history
+         ):
++            ccbench_instant(
++                "ccbench.spec.draft.copy_to_cpu.skipped",
++                {
++                    "reason": "no_cpu_consumer",
++                    "use_async_scheduling": self.use_async_scheduling,
++                    "has_structured_output_requests": (
++                        scheduler_output.has_structured_output_requests
++                    ),
++                    "requires_cpu_output_token_history": getattr(
++                        self.input_batch.sampling_metadata,
++                        "requires_cpu_output_token_history",
++                        None,
++                    ),
++                },
++            )
+             return
+         # We must also set the corresponding request ids.
+         self._draft_token_req_ids = self.input_batch.req_ids.copy()
+ 
+         draft_token_ids: torch.Tensor = self._draft_token_ids
+         if not torch.is_tensor(draft_token_ids):
++            ccbench_instant(
++                "ccbench.spec.draft.copy_to_cpu.skipped",
++                {
++                    "reason": "not_tensor",
++                    "draft_token_type": type(draft_token_ids).__name__,
++                },
++            )
+             return
+         assert self.draft_token_ids_event is not None
+         assert self.draft_token_ids_copy_stream is not None
+         assert self.draft_token_ids_cpu is not None
+         default_stream = torch.cuda.current_stream()
+         num_reqs = draft_token_ids.shape[0]
+-        with torch.cuda.stream(self.draft_token_ids_copy_stream):
+-            if not zeros_only:
+-                # Trigger async copy of draft token ids to cpu.
+-                self.draft_token_ids_copy_stream.wait_stream(default_stream)
+-                self.draft_token_ids_cpu[:num_reqs].copy_(
+-                    draft_token_ids, non_blocking=True
+-                )
+-            else:
+-                # No copy needed, just zero-out cpu tensor.
+-                self.draft_token_ids_cpu[:num_reqs] = 0
+-            self.draft_token_ids_event.record()
++        with ccbench_span(
++            "ccbench.spec.draft.copy_to_cpu",
++            {
++                "zeros_only": zeros_only,
++                "num_reqs": int(num_reqs),
++                "draft_token_ids_bytes": tensor_nbytes(draft_token_ids),
++                "draft_token_ids_shape": tensor_shape(draft_token_ids),
++                "use_async_scheduling": self.use_async_scheduling,
++                "has_structured_output_requests": scheduler_output.has_structured_output_requests,
++                "requires_cpu_output_token_history": getattr(
++                    self.input_batch.sampling_metadata,
++                    "requires_cpu_output_token_history",
++                    None,
++                ),
++            },
++        ):
++            with torch.cuda.stream(self.draft_token_ids_copy_stream):
++                if not zeros_only:
++                    # Trigger async copy of draft token ids to cpu.
++                    self.draft_token_ids_copy_stream.wait_stream(default_stream)
++                    self.draft_token_ids_cpu[:num_reqs].copy_(
++                        draft_token_ids, non_blocking=True
++                    )
++                else:
++                    # No copy needed, just zero-out cpu tensor.
++                    self.draft_token_ids_cpu[:num_reqs] = 0
++                self.draft_token_ids_event.record()
+ 
+     def _get_draft_token_ids_cpu(self) -> tuple[list[list[int]], list[str]]:
+         if isinstance(self._draft_token_ids, list):
+@@ -5141,25 +5303,45 @@ class GPUModelRunner(
+             return [], []
+         assert self.draft_token_ids_event is not None
+         assert self.draft_token_ids_cpu is not None
+-        self.draft_token_ids_event.synchronize()
++        with ccbench_span(
++            "ccbench.spec.draft.wait_cpu",
++            {"num_reqs": len(req_ids)},
++        ):
++            self.draft_token_ids_event.synchronize()
+         return self.draft_token_ids_cpu[: len(req_ids)].tolist(), req_ids
+ 
+     def _copy_valid_sampled_token_count(
+         self, next_token_ids: torch.Tensor, valid_sampled_tokens_count: torch.Tensor
+     ) -> None:
+         if self.valid_sampled_token_count_event is None:
++            ccbench_instant(
++                "ccbench.spec.valid_count.copy_to_cpu.skipped",
++                {"reason": "no_event"},
++            )
+             return
+ 
+         default_stream = torch.cuda.current_stream()
+         # Initialize a new stream to overlap the copy operation with
+         # prepare_input of draft model.
+-        with torch.cuda.stream(self.valid_sampled_token_count_copy_stream):
+-            self.valid_sampled_token_count_copy_stream.wait_stream(default_stream)  # type: ignore
+-            counts = valid_sampled_tokens_count
+-            counts_cpu = self.valid_sampled_token_count_cpu
+-            assert counts_cpu is not None
+-            counts_cpu[: counts.shape[0]].copy_(counts, non_blocking=True)
+-            self.valid_sampled_token_count_event.record()
++        with ccbench_span(
++            "ccbench.spec.valid_count.copy_to_cpu",
++            {
++                "next_token_ids_bytes": tensor_nbytes(next_token_ids),
++                "next_token_ids_shape": tensor_shape(next_token_ids),
++                "valid_count_bytes": tensor_nbytes(valid_sampled_tokens_count),
++                "valid_count_shape": tensor_shape(valid_sampled_tokens_count),
++                "use_async_spec_decode": self.use_async_spec_decode,
++            },
++        ):
++            with torch.cuda.stream(self.valid_sampled_token_count_copy_stream):
++                self.valid_sampled_token_count_copy_stream.wait_stream(  # type: ignore
++                    default_stream
++                )
++                counts = valid_sampled_tokens_count
++                counts_cpu = self.valid_sampled_token_count_cpu
++                assert counts_cpu is not None
++                counts_cpu[: counts.shape[0]].copy_(counts, non_blocking=True)
++                self.valid_sampled_token_count_event.record()
+ 
+         if self.use_async_spec_decode:
+             # Stash for GPU-side correction in _prepare_inputs.
+@@ -5175,7 +5357,11 @@ class GPUModelRunner(
+ 
+         counts_cpu = self.valid_sampled_token_count_cpu
+         assert counts_cpu is not None
+-        sampled_count_event.synchronize()
++        with ccbench_span(
++            "ccbench.spec.valid_count.wait_cpu",
++            {"num_reqs": int(prev_sampled_token_ids.shape[0])},
++        ):
++            sampled_count_event.synchronize()
+         return counts_cpu[: prev_sampled_token_ids.shape[0]].tolist()
+ 
+     def _get_spec_decode_draft_probs(
