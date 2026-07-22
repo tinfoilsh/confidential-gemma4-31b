@@ -1,9 +1,9 @@
 # vLLM v0.25.1 Deployment Patches
 
-These four patches apply in filename order to the official vLLM v0.25.1
+These 17 patches apply in filename order to the official vLLM v0.25.1
 Python package. They were generated from
-`tinfoilsh/vllm-cc-opt:milestone/gemma4-cc-v0251-b300-20260722` at commit
-`894b5f0f6f78c8b02663110be7998fa0dd2063f2`.
+`tinfoilsh/vllm-cc-opt:milestone/gemma4-cc-v0251-v1-perf-b300-20260722` at
+commit `56219cc43545d7959a3895752fba845727f2adee`.
 
 ## Included
 
@@ -17,23 +17,24 @@ Python package. They were generated from
   target-width input embeddings for MTP drafts while retaining the EAGLE width
   guard. Without it, Gemma 4 MTP fails initialization with a 6400 x 10752
   projection mismatch.
+- `0105`-`0111` remove avoidable V1 token-history and metadata copies and add
+  a CC-gated asynchronous output publication path, including MTP acceptance
+  counts.
+- `0112`-`0116` add the uniform MTP metadata and dirty block-table kernels plus
+  the stale-state and overlapping-update correctness repairs found during the
+  original B300 validation.
+- `0117` validates CC fast-path token domains and packed block-table metadata
+  before it reaches the GPU kernels.
 
 ## Removed From v0.23.0
 
 The v0.23.0 Gemma streaming parser patch and three security backports are not
 carried forward because v0.25.1 contains their replacements or upstream fixes.
 
-The V2 runner contains native GPU-side metadata, async output, and MTP
-implementations corresponding to most of the old CC stack. V2 is not enabled
-for this release because stock v0.25.1 produced incorrect Gemma 4 output in
-full-CC B300 tests, including eager no-MTP controls. The production candidate
-therefore uses V1 while the remaining v0.23.0 performance patches are audited
-and measured against the new baseline.
-
-The custom uniform-decode metadata and dirty block-table kernels are also
-excluded from the minimal candidate. They will only be ported if matched
-full-CC measurements show a remaining regression that cannot be recovered by
-the smaller patch set.
+The V2 runner has native equivalents for much of this stack, but it is not
+enabled: stock v0.25.1 produced incorrect Gemma 4 output in full-CC B300 tests,
+including eager no-MTP controls. The candidate therefore uses V1 and preserves
+the repaired V1 CC fast paths.
 
 ## Verification
 
@@ -43,5 +44,5 @@ Run:
 validation/verify_patch_series.sh /path/to/vllm-checkout
 ```
 
-The script checks out v0.25.1, applies all three patches with zero fuzz, and
+The script checks out v0.25.1, applies all 17 patches with zero fuzz, and
 diffs the result against the source branch commit above.

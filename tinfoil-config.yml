@@ -22,6 +22,10 @@ containers:
       # v0.25.1 V2 corrupts Gemma 4 output on B300; V1 is full-CC validated.
       - VLLM_USE_V2_MODEL_RUNNER: "0"
       - VLLM_CC_PAGEABLE_H2D: "1"
+      - VLLM_CC_OUTPUT_WORKER: "1"
+      - VLLM_CC_SPEC_COUNT_FAST_PUBLICATION: "1"
+      - VLLM_CC_DECODE_METADATA_FASTPATH: "1"
+      - VLLM_CC_BLOCK_TABLE_DIRTY_UPDATE: "1"
       # Public regex constraints are disabled; JSON schema/choice remain available.
       - VLLM_DISABLE_STRUCTURED_OUTPUT_REGEX: "1"
     command: ["--model", "/tinfoil/mpk/mpk-cda2f261f72d80a847eb6fabea1f9949bf14ce5bb323808a8e2e4a9f09018357","--tensor-parallel-size",

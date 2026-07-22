@@ -1,0 +1,114 @@
+From af7e8119a2c3b4bc584b22a189e3305bc19f1fb6 Mon Sep 17 00:00:00 2001
+From: Jules Drean <jules@tinfoil.sh>
+Date: Tue, 23 Jun 2026 16:57:32 -0400
+Subject: [PATCH 108/117] cc: make output token history on demand
+
+---
+ vllm/v1/sample/metadata.py         |  1 +
+ vllm/v1/worker/gpu_input_batch.py  | 26 +++++++++++++++-----------
+ vllm/v1/worker/gpu_model_runner.py |  5 +++--
+ 3 files changed, 19 insertions(+), 13 deletions(-)
+
+diff --git a/vllm/v1/sample/metadata.py b/vllm/v1/sample/metadata.py
+index fa4ceac8e..b6c1626ec 100644
+--- a/vllm/v1/sample/metadata.py
++++ b/vllm/v1/sample/metadata.py
+@@ -32,6 +32,7 @@ class SamplingMetadata:
+     repetition_penalties: torch.Tensor
+ 
+     output_token_ids: list[list[int]]
++    requires_cpu_output_token_history: bool
+ 
+     # `allowed_token_ids_mask` is a 2D bool tensor of shape (max batch size,
+     # vocab size).
+diff --git a/vllm/v1/worker/gpu_input_batch.py b/vllm/v1/worker/gpu_input_batch.py
+index 28d1a04b7..3bfa3827b 100644
+--- a/vllm/v1/worker/gpu_input_batch.py
++++ b/vllm/v1/worker/gpu_input_batch.py
+@@ -877,16 +877,7 @@ class InputBatch:
+ 
+         # Only set output_token_ids if required by the current requests'
+         # sampling parameters.
+-        holder = self.thinking_budget_state_holder
+-        thinking_budget_tracks_reqs = (
+-            holder is not None and holder.has_tracked_requests()
+-        )
+-        needs_output_token_ids = (
+-            not self.no_penalties
+-            or bool(self.bad_words_token_ids)
+-            or self.logitsprocs_need_output_token_ids
+-            or thinking_budget_tracks_reqs
+-        )
++        needs_output_token_ids = self.requires_cpu_output_token_history()
+         output_token_ids = (
+             cast(list[list[int]], self.req_output_token_ids)
+             if needs_output_token_ids
+@@ -926,6 +917,7 @@ class InputBatch:
+             presence_penalties=self.presence_penalties[:num_reqs],
+             repetition_penalties=self.repetition_penalties[:num_reqs],
+             output_token_ids=output_token_ids,
++            requires_cpu_output_token_history=needs_output_token_ids,
+             spec_token_ids=self.spec_token_ids,
+             no_penalties=self.no_penalties,
+             allowed_token_ids_mask=allowed_token_ids_mask,
+@@ -957,6 +949,18 @@ class InputBatch:
+             pooling_states=pooling_states,
+         )
+ 
++    def requires_cpu_output_token_history(self) -> bool:
++        holder = self.thinking_budget_state_holder
++        thinking_budget_tracks_reqs = (
++            holder is not None and holder.has_tracked_requests()
++        )
++        return (
++            not self.no_penalties
++            or bool(self.bad_words_token_ids)
++            or self.logitsprocs_need_output_token_ids
++            or thinking_budget_tracks_reqs
++        )
++
+     def _make_prompt_token_ids_cpu_tensor(self) -> torch.Tensor:
+         num_reqs = self.num_reqs
+         max_prompt_len = self.num_prompt_tokens[:num_reqs].max()
+@@ -1009,7 +1013,7 @@ class InputBatch:
+         tensor and corresponding copy-ready event. Used to repair
+         output_token_ids prior to sampling, if needed by logits processors.
+         """
+-        if self.sampling_metadata.output_token_ids:
++        if self.sampling_metadata.requires_cpu_output_token_history:
+             self.sampled_token_ids_cpu = sampled_token_ids_cpu
+             self.async_copy_ready_event = async_copy_ready_event
+         else:
+diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
+index 1211eec58..bb6ad2d8e 100644
+--- a/vllm/v1/worker/gpu_model_runner.py
++++ b/vllm/v1/worker/gpu_model_runner.py
+@@ -1387,7 +1387,7 @@ class GPUModelRunner(
+             return False
+         if self.check_ep_fault:
+             return False
+-        if self.input_batch.sampling_metadata.output_token_ids:
++        if self.input_batch.sampling_metadata.requires_cpu_output_token_history:
+             logger.info_once(
+                 "VLLM_CC_OUTPUT_WORKER falling back to stock output copy because "
+                 "sampling metadata needs CPU-visible output token ids."
+@@ -5212,7 +5212,7 @@ class GPUModelRunner(
+         # we only copy when needed for structured output, penalties or bad_words.
+         if self.use_async_scheduling and not (
+             scheduler_output.has_structured_output_requests
+-            or self.input_batch.sampling_metadata.output_token_ids
++            or self.input_batch.sampling_metadata.requires_cpu_output_token_history
+         ):
+             return
+         # We must also set the corresponding request ids.
+@@ -6535,6 +6535,7 @@ class GPUModelRunner(
+             presence_penalties=dummy_tensors(0.1),
+             repetition_penalties=dummy_tensors(0.1),
+             output_token_ids=[[] for _ in range(num_reqs)],
++            requires_cpu_output_token_history=False,
+             spec_token_ids=[[] for _ in range(num_reqs)],
+             allowed_token_ids_mask=None,
+             bad_words_token_ids={},
+-- 
+2.43.0
+

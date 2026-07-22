@@ -3,28 +3,27 @@
 Tinfoil confidential enclave configuration for
 [`google/gemma-4-31B-it`](https://huggingface.co/google/gemma-4-31B-it).
 
-The active security-review branch integrates the preserved vLLM v0.23.0
-confidential-computing and MTP optimization stack plus current security
-backports. It is not a production release. Read [HANDOFF.md](HANDOFF.md) before
-building or enabling additional feature gates.
+The active milestone branch ports the validated confidential-computing and MTP
+optimization stack to vLLM v0.25.1. It is not a production release until the
+full-CC validation recorded in [HANDOFF.md](HANDOFF.md) is complete.
 
 ## Repo layout
 
 ```
 confidential-gemma4-31b/
-├── Dockerfile                 builds on the pinned vLLM v0.23.0 base
+├── Dockerfile                 builds on the digest-pinned vLLM v0.25.1 base
 ├── HANDOFF.md                 candidate status and required validation
 ├── patches/                   ordered deployment patch series
-│   ├── 0001-...               Gemma structured-output workaround
-│   ├── 0101-0120-...          vLLM CC/MTP, security, and API fixes
+│   ├── 0101-0104-...          minimal CC, correctness, and upstream MTP fixes
+│   ├── 0105-0117-...          V1 CC/MTP performance and safety fixes
 │   └── README.md              provenance and regeneration instructions
 ├── validation/                API and source-level verification tools
 ├── tinfoil-config.yml         enclave configuration
 └── .github/workflows/
-    ├── tinfoil-build.yml      manual workflow_dispatch: build → push → bump config → tag
-    └── tinfoil-release.yml    measure-image-action + publish
+    ├── tinfoil-build.yml      manual review/release image build
+    └── tinfoil-release.yml    attestation and release publication
 ```
 
-The authoritative implementation is the head of pull request 16 in
-`tinfoilsh/vllm-cc-opt`. Experiment and security-review evidence is in the
-private `tinfoilsh/vllm-cc-gemma4-lab` repository.
+The authoritative implementation is
+`tinfoilsh/vllm-cc-opt:milestone/gemma4-cc-v0251-v1-perf-b300-20260722`.
+Experiment evidence is in the private `tinfoilsh/vllm-cc-gemma4-lab` repo.

@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.6
 #
-# Minimal CC-aware vLLM v0.25.1 candidate. The amd64 base is digest-pinned so
+# CC/MTP-optimized vLLM v0.25.1 V1 candidate. The amd64 base is digest-pinned so
 # the full-CC comparison can be reproduced independently of mutable tags.
 ARG VLLM_BASE_IMAGE=vllm/vllm-openai:v0.25.1@sha256:f0b9a0dc75a9fca3b6811e3279367b2d6a448055a000bfd13859587d74cef268
 FROM ${VLLM_BASE_IMAGE}
@@ -52,7 +52,7 @@ RUN set -eux; \
     done; \
     find "$VLLM_PACKAGE_ROOT" -name '__pycache__' -type d -exec rm -rf {} + || true; \
     rm -rf /tmp/tinfoil-patches; \
-    python3 -c "import vllm; assert vllm.__version__.startswith('0.25.1'), vllm.__version__; print('vllm', vllm.__version__, 'with minimal CC patches')"
+    python3 -c "import vllm; assert vllm.__version__.startswith('0.25.1'), vllm.__version__; print('vllm', vllm.__version__, 'with CC/MTP patches')"
 
 # Gemma 4 video decoding reaches FFmpeg through OpenCV. The newest compatible
 # OpenCV wheel does not yet contain FFmpeg 8.1.2, so video is disabled in the
@@ -98,6 +98,8 @@ source = "\n".join(
         "utils/platform_utils.py",
         "utils/torch_utils.py",
         "v1/worker/gpu_model_runner.py",
+        "v1/worker/block_table.py",
+        "v1/sample/rejection_sampler.py",
         "v1/spec_decode/llm_base_proposer.py",
     )
 )
@@ -109,15 +111,22 @@ required = (
     "uses_grammar_constraint",
     "logitsprocs_need_output_token_ids=bool(custom_logitsprocs)",
     'share_embeddings and hasattr(self.model, "has_own_embed_tokens")',
+    "VLLM_CC_OUTPUT_WORKER",
+    "VLLM_CC_SPEC_COUNT_FAST_PUBLICATION",
+    "VLLM_CC_DECODE_METADATA_FASTPATH",
+    "VLLM_CC_BLOCK_TABLE_DIRTY_UPDATE",
+    "_cc_uniform_mtp_decode_metadata_kernel",
+    "_coalesce_dirty_updates",
+    "sampled_token_ids_np >= 0",
 )
 missing = [marker for marker in required if marker not in source]
 if missing:
     raise SystemExit(f"missing v0.25.1 CC patch markers: {missing}")
 
-print("verified minimal v0.25.1 CC patch set")
+print("verified v0.25.1 V1 CC/MTP patch set")
 PY
 
 LABEL org.opencontainers.image.source="https://github.com/tinfoilsh/confidential-gemma4-31b" \
       org.opencontainers.image.revision="${SOURCE_REVISION}" \
-      com.tinfoil.vllm.runtime-revision="894b5f0f6f78c8b02663110be7998fa0dd2063f2" \
-      com.tinfoil.vllm.variant="minimal-cc-v0.25.1-v1-mtp"
+      com.tinfoil.vllm.runtime-revision="56219cc43545d7959a3895752fba845727f2adee" \
+      com.tinfoil.vllm.variant="cc-mtp-perf-v0.25.1-v1"

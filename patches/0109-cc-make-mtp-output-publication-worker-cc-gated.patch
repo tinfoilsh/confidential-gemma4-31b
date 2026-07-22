@@ -1,0 +1,192 @@
+From f0f900ccfcb055f7191102824749372b8bcc08db Mon Sep 17 00:00:00 2001
+From: Jules Drean <jules@tinfoil.sh>
+Date: Wed, 24 Jun 2026 04:18:36 -0400
+Subject: [PATCH 109/117] cc: make mtp output publication worker cc gated
+
+---
+ vllm/v1/worker/gpu_model_runner.py | 107 +++++++++++++++++------------
+ 1 file changed, 64 insertions(+), 43 deletions(-)
+
+diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
+index bb6ad2d8e..584e10050 100644
+--- a/vllm/v1/worker/gpu_model_runner.py
++++ b/vllm/v1/worker/gpu_model_runner.py
+@@ -384,9 +384,9 @@ def _copy_routed_experts_to_cpu_nonblocking(
+ 
+ @dataclass
+ class CCOutputPublicationResult:
+-    sampled_token_ids_cpu: torch.Tensor
+-    logprobs_tensors_cpu: LogprobsTensors | None
+-    routed_experts_cpu: RoutedExpertsTensors | None
++    sampled_token_ids: list[list[int]]
++    logprobs: LogprobsLists | None
++    routed_experts: RoutedExpertsLists | None
+ 
+ 
+ class CCOutputPublication:
+@@ -416,6 +416,8 @@ class CCOutputPublicationTask:
+     sampled_token_ids: torch.Tensor
+     logprobs_tensors: LogprobsTensors | None
+     routed_experts: RoutedExpertsTensors | None
++    invalid_req_indices: list[int]
++    vocab_size: int
+     ready_event: torch.Event
+     publication: CCOutputPublication
+ 
+@@ -443,6 +445,8 @@ class CCOutputPublicationWorker:
+         sampled_token_ids: torch.Tensor,
+         logprobs_tensors: LogprobsTensors | None,
+         routed_experts: RoutedExpertsTensors | None,
++        invalid_req_indices: list[int],
++        vocab_size: int,
+     ) -> CCOutputPublication:
+         ready_event = torch.Event()
+         ready_event.record(torch.cuda.current_stream())
+@@ -452,6 +456,8 @@ class CCOutputPublicationWorker:
+                 sampled_token_ids=sampled_token_ids,
+                 logprobs_tensors=logprobs_tensors,
+                 routed_experts=routed_experts,
++                invalid_req_indices=invalid_req_indices,
++                vocab_size=vocab_size,
+                 ready_event=ready_event,
+                 publication=publication,
+             )
+@@ -481,19 +487,43 @@ class CCOutputPublicationWorker:
+             try:
+                 task.ready_event.synchronize()
+                 with torch.cuda.stream(copy_stream):
+-                    result = CCOutputPublicationResult(
+-                        sampled_token_ids_cpu=_copy_tensor_to_cpu_nonblocking(
+-                            task.sampled_token_ids, self.pin_memory
+-                        ),
+-                        logprobs_tensors_cpu=_copy_logprobs_to_cpu_nonblocking(
+-                            task.logprobs_tensors, self.pin_memory
+-                        ),
+-                        routed_experts_cpu=_copy_routed_experts_to_cpu_nonblocking(
+-                            task.routed_experts, self.pin_memory
+-                        ),
++                    sampled_token_ids_cpu = _copy_tensor_to_cpu_nonblocking(
++                        task.sampled_token_ids, self.pin_memory
++                    )
++                    logprobs_tensors_cpu = _copy_logprobs_to_cpu_nonblocking(
++                        task.logprobs_tensors, self.pin_memory
++                    )
++                    routed_experts_cpu = _copy_routed_experts_to_cpu_nonblocking(
++                        task.routed_experts, self.pin_memory
+                     )
+                 copy_stream.synchronize()
+-                task.publication.set_result(result)
++                max_gen_len = sampled_token_ids_cpu.shape[-1]
++                if max_gen_len == 1:
++                    sampled_token_ids = sampled_token_ids_cpu.tolist()
++                    for i in task.invalid_req_indices:
++                        sampled_token_ids[i].clear()
++                    logprobs = None
++                    if logprobs_tensors_cpu is not None:
++                        logprobs = logprobs_tensors_cpu.tolists()
++                else:
++                    sampled_token_ids, logprobs = RejectionSampler.parse_output(
++                        sampled_token_ids_cpu,
++                        task.vocab_size,
++                        task.invalid_req_indices,
++                        logprobs_tensors=logprobs_tensors_cpu,
++                    )
++                routed_experts = (
++                    routed_experts_cpu.tolists()
++                    if routed_experts_cpu is not None
++                    else None
++                )
++                task.publication.set_result(
++                    CCOutputPublicationResult(
++                        sampled_token_ids=sampled_token_ids,
++                        logprobs=logprobs,
++                        routed_experts=routed_experts,
++                    )
++                )
+             except BaseException as exc:
+                 task.publication.set_error(exc)
+ 
+@@ -503,40 +533,17 @@ class AsyncGPUWorkerModelRunnerOutput(AsyncModelRunnerOutput):
+         self,
+         model_runner_output: ModelRunnerOutput,
+         publication: CCOutputPublication,
+-        invalid_req_indices: list[int],
+-        vocab_size: int,
+     ) -> None:
+         self._model_runner_output = model_runner_output
+         self._publication = publication
+-        self._invalid_req_indices = invalid_req_indices
+-        self.vocab_size = vocab_size
+ 
+     def get_output(self) -> ModelRunnerOutput:
+         result = self._publication.result()
+-        sampled_token_ids_cpu = result.sampled_token_ids_cpu
+-        max_gen_len = sampled_token_ids_cpu.shape[-1]
+-
+-        if max_gen_len == 1:
+-            valid_sampled_token_ids = sampled_token_ids_cpu.tolist()
+-            for i in self._invalid_req_indices:
+-                valid_sampled_token_ids[i].clear()
+-            logprobs_lists = None
+-            if result.logprobs_tensors_cpu is not None:
+-                logprobs_lists = result.logprobs_tensors_cpu.tolists()
+-        else:
+-            valid_sampled_token_ids, logprobs_lists = RejectionSampler.parse_output(
+-                sampled_token_ids_cpu,
+-                self.vocab_size,
+-                self._invalid_req_indices,
+-                logprobs_tensors=result.logprobs_tensors_cpu,
+-            )
+ 
+         output = self._model_runner_output
+-        output.sampled_token_ids = valid_sampled_token_ids
+-        output.logprobs = logprobs_lists
+-
+-        if result.routed_experts_cpu is not None:
+-            output.routed_experts = result.routed_experts_cpu.tolists()
++        output.sampled_token_ids = result.sampled_token_ids
++        output.logprobs = result.logprobs
++        output.routed_experts = result.routed_experts
+ 
+         return output
+ 
+@@ -938,9 +945,23 @@ class GPUModelRunner(
+         self._cc_decode_metadata_arange_i64_gpu: torch.Tensor | None = None
+         self._cc_decode_metadata_fast_ready_req_ids: tuple[str, ...] | None = None
+         self._cc_decode_metadata_has_logged_engaged = False
+-        self.cc_output_worker_enabled = bool(
++        cc_output_worker_requested = bool(
+             int(os.environ.get("VLLM_CC_OUTPUT_WORKER", "0") or "0")
+         )
++        try:
++            cc_output_worker_cc_enabled = (
++                current_platform.is_confidential_compute_enabled()
++            )
++        except Exception:
++            cc_output_worker_cc_enabled = False
++        self.cc_output_worker_enabled = (
++            cc_output_worker_requested and cc_output_worker_cc_enabled
++        )
++        if cc_output_worker_requested and not cc_output_worker_cc_enabled:
++            logger.info(
++                "Ignoring VLLM_CC_OUTPUT_WORKER because confidential compute "
++                "is not enabled."
++            )
+         if self.cc_output_worker_enabled:
+             logger.info("Using experimental CC output publication worker.")
+         self._cc_output_publication_worker: CCOutputPublicationWorker | None = None
+@@ -5120,9 +5141,9 @@ class GPUModelRunner(
+                         sampled_token_ids=sampler_output.sampled_token_ids,
+                         logprobs_tensors=sampler_output.logprobs_tensors,
+                         routed_experts=routed_experts_snapshot,
++                        invalid_req_indices=invalid_req_indices,
++                        vocab_size=self.input_batch.vocab_size,
+                     ),
+-                    invalid_req_indices=invalid_req_indices,
+-                    vocab_size=self.input_batch.vocab_size,
+                 )
+                 self.input_batch.sampled_token_ids_cpu = None
+                 self.input_batch.async_copy_ready_event = None
+-- 
+2.43.0
+

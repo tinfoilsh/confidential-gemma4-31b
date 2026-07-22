@@ -1,0 +1,1531 @@
+From 7775ee06879f28e2f1db070ccae88755298614c6 Mon Sep 17 00:00:00 2001
+From: Jules Drean <jules@tinfoil.sh>
+Date: Thu, 25 Jun 2026 14:02:26 -0400
+Subject: [PATCH 112/117] cc: add mtp metadata and block-table fast paths
+
+---
+ vllm/v1/attention/backends/flashinfer.py     |  18 +-
+ vllm/v1/ccbench_instrumentation.py           | 121 +++
+ vllm/v1/spec_decode/extract_hidden_states.py |   1 +
+ vllm/v1/spec_decode/llm_base_proposer.py     |   1 +
+ vllm/v1/utils.py                             |   3 +
+ vllm/v1/worker/block_table.py                | 233 +++++-
+ vllm/v1/worker/gpu_model_runner.py           | 740 ++++++++++++++++---
+ 7 files changed, 1021 insertions(+), 96 deletions(-)
+ create mode 100644 vllm/v1/ccbench_instrumentation.py
+
+diff --git a/vllm/v1/attention/backends/flashinfer.py b/vllm/v1/attention/backends/flashinfer.py
+index 5e2295c0a..373e7aadd 100755
+--- a/vllm/v1/attention/backends/flashinfer.py
++++ b/vllm/v1/attention/backends/flashinfer.py
+@@ -791,12 +791,18 @@ class FlashInferMetadataBuilder(AttentionMetadataBuilder[FlashInferMetadata]):
+         # reused CPU buffers to avoid a race condition between step N async copies to
+         # GPU and step N+1 buffer updates.
+         self.pin_memory = not vllm_config.use_v2_model_runner and PIN_MEMORY
+-        self.paged_kv_indptr = self._make_buffer(max_num_reqs + 1)
++        self.paged_kv_indptr = self._make_buffer(
++            max_num_reqs + 1, name="flashinfer_paged_kv_indptr"
++        )
+         self.paged_kv_indptr_cpu_buffer = torch.zeros_like(
+             self.paged_kv_indptr.cpu, pin_memory=self.pin_memory
+         )  # Extra buffer for mutable paged_kv_indptr.cpu in cuda graph mode
+-        self.paged_kv_indices = self._make_buffer(max_num_pages)
+-        self.paged_kv_last_page_len = self._make_buffer(max_num_reqs)
++        self.paged_kv_indices = self._make_buffer(
++            max_num_pages, name="flashinfer_paged_kv_indices"
++        )
++        self.paged_kv_last_page_len = self._make_buffer(
++            max_num_reqs, name="flashinfer_paged_kv_last_page_len"
++        )
+ 
+     # Keep SM90 prefill/decode Q dtype selection in one place.
+     def get_q_data_type(self, is_prefill: bool) -> torch.dtype:
+@@ -836,7 +842,10 @@ class FlashInferMetadataBuilder(AttentionMetadataBuilder[FlashInferMetadata]):
+         return self.kv_cache_spec.dtype
+ 
+     def _make_buffer(
+-        self, *size: int | torch.SymInt, dtype: torch.dtype = torch.int32
++        self,
++        *size: int | torch.SymInt,
++        dtype: torch.dtype = torch.int32,
++        name: str | None = None,
+     ) -> CpuGpuBuffer:
+         return CpuGpuBuffer(
+             *size,
+@@ -844,6 +853,7 @@ class FlashInferMetadataBuilder(AttentionMetadataBuilder[FlashInferMetadata]):
+             device=self.device,
+             pin_memory=self.pin_memory,
+             with_numpy=True,
++            buffer_name=name,
+         )
+ 
+     @override  # type: ignore[misc]
+diff --git a/vllm/v1/ccbench_instrumentation.py b/vllm/v1/ccbench_instrumentation.py
+new file mode 100644
+index 000000000..722563f06
+--- /dev/null
++++ b/vllm/v1/ccbench_instrumentation.py
+@@ -0,0 +1,121 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""Optional ccbenchv2 instrumentation helpers.
++
++This module deliberately has no hard dependency on the ccbench runtime. When
++ccbench is absent or disabled, all helpers are no-ops.
++"""
++
++from __future__ import annotations
++
++import contextlib
++import os
++from collections.abc import Iterator
++from typing import Any
++
++_EVENTS: Any | None | bool = None
++
++
++def _is_enabled() -> bool:
++    return bool(os.environ.get("CCBENCHV2_JSONL")) or (
++        os.environ.get("VLLM_CCBENCH_SPEC_INSTRUMENTATION", "0") == "1"
++    )
++
++
++def _events() -> Any | None:
++    global _EVENTS
++    if not _is_enabled():
++        return None
++    if _EVENTS is False:
++        return None
++    if _EVENTS is None:
++        try:
++            from ccbenchv2_runtime import events
++        except Exception:
++            _EVENTS = False
++            return None
++        _EVENTS = events
++    return _EVENTS
++
++
++def _sanitize_value(value: Any) -> Any:
++    if value is None or isinstance(value, (str, int, float, bool)):
++        return value
++    if isinstance(value, (list, tuple)):
++        return [_sanitize_value(item) for item in value[:16]]
++    if isinstance(value, dict):
++        return {
++            str(key): _sanitize_value(item)
++            for key, item in list(value.items())[:16]
++        }
++    return str(value)
++
++
++def _sanitize_attrs(attrs: dict[str, Any] | None) -> dict[str, Any]:
++    if not attrs:
++        return {}
++    return {str(key): _sanitize_value(value) for key, value in attrs.items()}
++
++
++@contextlib.contextmanager
++def ccbench_span(
++    name: str, attrs: dict[str, Any] | None = None
++) -> Iterator[None]:
++    events = _events()
++    if events is None:
++        yield
++        return
++
++    manager = None
++    try:
++        manager = events.span(name, _sanitize_attrs(attrs))
++        manager.__enter__()
++    except Exception:
++        yield
++        return
++
++    try:
++        yield
++    except BaseException as exc:
++        manager.__exit__(type(exc), exc, exc.__traceback__)
++        raise
++    else:
++        manager.__exit__(None, None, None)
++
++
++def ccbench_instant(name: str, attrs: dict[str, Any] | None = None) -> None:
++    events = _events()
++    if events is None:
++        return
++    try:
++        events.get_writer().instant(name, _sanitize_attrs(attrs))
++    except Exception:
++        return
++
++
++def tensor_nbytes(tensor: Any) -> int:
++    try:
++        return int(tensor.numel() * tensor.element_size())
++    except Exception:
++        return 0
++
++
++def tensor_shape(tensor: Any) -> list[int]:
++    try:
++        return [int(dim) for dim in tensor.shape]
++    except Exception:
++        return []
++
++
++def safe_len(value: Any) -> int:
++    try:
++        return int(len(value))
++    except Exception:
++        return 0
++
++
++def safe_sum(value: Any) -> int:
++    try:
++        return int(sum(value))
++    except Exception:
++        return 0
+diff --git a/vllm/v1/spec_decode/extract_hidden_states.py b/vllm/v1/spec_decode/extract_hidden_states.py
+index de7a075e2..06c45ccfc 100644
+--- a/vllm/v1/spec_decode/extract_hidden_states.py
++++ b/vllm/v1/spec_decode/extract_hidden_states.py
+@@ -64,6 +64,7 @@ class ExtractHiddenStatesProposer:
+             pin_memory=PIN_MEMORY,
+             device=device,
+             with_numpy=True,
++            buffer_name="spec_backup_next_token_ids",
+         )
+ 
+         self.hf_config = vllm_config.speculative_config.draft_model_config.hf_config
+diff --git a/vllm/v1/spec_decode/llm_base_proposer.py b/vllm/v1/spec_decode/llm_base_proposer.py
+index 45b463737..1bcc4a804 100644
+--- a/vllm/v1/spec_decode/llm_base_proposer.py
++++ b/vllm/v1/spec_decode/llm_base_proposer.py
+@@ -245,6 +245,7 @@ class SpecDecodeBaseProposer:
+             pin_memory=PIN_MEMORY,
+             device=device,
+             with_numpy=True,
++            buffer_name="spec_backup_next_token_ids",
+         )
+         self._enable_probabilistic_draft_probs = (
+             self.speculative_config.rejection_sample_method == "standard"
+diff --git a/vllm/v1/utils.py b/vllm/v1/utils.py
+index b485d838f..b2134e6b3 100644
+--- a/vllm/v1/utils.py
++++ b/vllm/v1/utils.py
+@@ -117,7 +117,10 @@ class CpuGpuBuffer:
+         device: torch.device,
+         pin_memory: bool = PIN_MEMORY,
+         with_numpy: bool = True,
++        buffer_name: str | None = None,
+     ) -> None:
++        self.buffer_name = buffer_name
++        self.pin_memory = pin_memory
+         # these buffers are mutable runtime state, so allocate them as normal
+         with torch.inference_mode(False):
+             self.cpu = torch.zeros(
+diff --git a/vllm/v1/worker/block_table.py b/vllm/v1/worker/block_table.py
+index 5fbd06bab..97743af99 100644
+--- a/vllm/v1/worker/block_table.py
++++ b/vllm/v1/worker/block_table.py
+@@ -8,9 +8,11 @@ import torch
+ 
+ from vllm.distributed import get_dcp_group, get_pcp_group
+ from vllm.logger import init_logger
++from vllm.platforms import current_platform
+ from vllm.triton_utils import tl, triton
+ from vllm.utils.math_utils import cdiv
+ from vllm.v1.attention.backends.utils import PAD_SLOT_ID
++from vllm.v1.ccbench_instrumentation import ccbench_instant, ccbench_span
+ from vllm.v1.utils import CpuGpuBuffer
+ from vllm.v1.worker.cp_utils import get_total_cp_world_size
+ 
+@@ -70,16 +72,48 @@ class BlockTable:
+         self.max_num_blocks_per_req = max_num_blocks_per_req * self.blocks_per_kv_block
+ 
+         self.block_table = self._make_buffer(
+-            self.max_num_reqs, self.max_num_blocks_per_req, dtype=torch.int32
++            self.max_num_reqs,
++            self.max_num_blocks_per_req,
++            dtype=torch.int32,
++            name="block_table",
+         )
+         self.num_blocks_per_row = np.zeros(max_num_reqs, dtype=np.int32)
++        block_table_dirty_update_requested = bool(
++            int(os.environ.get("VLLM_CC_BLOCK_TABLE_DIRTY_UPDATE", "0") or "0")
++        )
++        block_table_dirty_update_cc_enabled = (
++            current_platform.is_confidential_compute_enabled()
++            if block_table_dirty_update_requested
++            else False
++        )
++        if (
++            block_table_dirty_update_requested
++            and not block_table_dirty_update_cc_enabled
++        ):
++            logger.warning_once(
++                "Ignoring VLLM_CC_BLOCK_TABLE_DIRTY_UPDATE because "
++                "confidential compute is not enabled."
++            )
++        self._block_table_dirty_update_enabled = (
++            block_table_dirty_update_requested
++            and block_table_dirty_update_cc_enabled
++        )
+         self._block_table_dirty_commit_enabled = bool(
+             int(os.environ.get("VLLM_CC_DECODE_METADATA_FASTPATH", "0") or "0")
++            or self._block_table_dirty_update_enabled
+         )
+-        self._block_table_dirty = True
++        self._block_table_dirty = False
++        self._dirty_rows: list[int] = []
++        self._dirty_starts: list[int] = []
++        self._dirty_values: list[int] = []
++        self._dirty_cu_lens: list[int] = []
++        self._dirty_packed_cpu: torch.Tensor | None = None
++        self._dirty_packed_gpu: torch.Tensor | None = None
+ 
+         self.slot_mapping = self._make_buffer(
+-            self.max_num_batched_tokens, dtype=torch.int64
++            self.max_num_batched_tokens,
++            dtype=torch.int64,
++            name="slot_mapping",
+         )
+ 
+         if self.use_hybrid_blocks:
+@@ -123,6 +157,7 @@ class BlockTable:
+         self.num_blocks_per_row[row_idx] += num_blocks
+         self.block_table.np[row_idx, start : start + num_blocks] = block_ids
+         self._block_table_dirty = True
++        self._stage_dirty_update(row_idx, start, block_ids)
+ 
+     def add_row(self, block_ids: list[int], row_idx: int) -> None:
+         self.num_blocks_per_row[row_idx] = 0
+@@ -134,6 +169,7 @@ class BlockTable:
+         if num_blocks > 0:
+             self.block_table.np[row_idx, :num_blocks] = 0
+             self._block_table_dirty = True
++            self._stage_dirty_update(row_idx, 0, [0] * num_blocks)
+         self.num_blocks_per_row[row_idx] = 0
+ 
+     def move_row(self, src: int, tgt: int) -> None:
+@@ -142,12 +178,18 @@ class BlockTable:
+         block_table_np[tgt, :num_blocks] = block_table_np[src, :num_blocks]
+         self.num_blocks_per_row[tgt] = num_blocks
+         self._block_table_dirty = True
++        self._stage_dirty_update(tgt, 0, block_table_np[tgt, :num_blocks])
+ 
+     def swap_row(self, src: int, tgt: int) -> None:
+         src_tgt, tgt_src = [src, tgt], [tgt, src]
+         self.num_blocks_per_row[src_tgt] = self.num_blocks_per_row[tgt_src]
+         self.block_table.np[src_tgt] = self.block_table.np[tgt_src]
+         self._block_table_dirty = True
++        block_table_np = self.block_table.np
++        src_blocks = self.num_blocks_per_row[src]
++        tgt_blocks = self.num_blocks_per_row[tgt]
++        self._stage_dirty_update(src, 0, block_table_np[src, :src_blocks])
++        self._stage_dirty_update(tgt, 0, block_table_np[tgt, :tgt_blocks])
+ 
+     def compute_slot_mapping(
+         self,
+@@ -179,14 +221,157 @@ class BlockTable:
+             self.block_table.copy_to_gpu(num_reqs)
+             return
+ 
+-        if self._block_table_dirty:
+-            self.block_table.copy_to_gpu(num_reqs)
+-            self._block_table_dirty = False
++        if not self._block_table_dirty:
++            return
++
++        if self._block_table_dirty_update_enabled and self._dirty_values:
++            if self._try_commit_dirty_updates(num_reqs):
++                self._block_table_dirty = False
++                return
++
++        self.block_table.copy_to_gpu(num_reqs)
++        self._clear_dirty_updates()
++        self._block_table_dirty = False
+ 
+     def clear(self) -> None:
+         self.block_table.gpu.fill_(0)
+         self.block_table.cpu.fill_(0)
+         self._block_table_dirty = False
++        self._clear_dirty_updates()
++
++    def _stage_dirty_update(
++        self,
++        row_idx: int,
++        start: int,
++        block_ids: list[int] | np.ndarray,
++    ) -> None:
++        if not self._block_table_dirty_update_enabled:
++            return
++        if len(block_ids) == 0:
++            return
++
++        self._dirty_rows.append(row_idx)
++        self._dirty_starts.append(start)
++        if isinstance(block_ids, np.ndarray):
++            self._dirty_values.extend(int(v) for v in block_ids.tolist())
++        else:
++            self._dirty_values.extend(int(v) for v in block_ids)
++        self._dirty_cu_lens.append(len(self._dirty_values))
++
++    def _clear_dirty_updates(self) -> None:
++        self._dirty_rows.clear()
++        self._dirty_starts.clear()
++        self._dirty_values.clear()
++        self._dirty_cu_lens.clear()
++
++    def _ensure_dirty_update_buffer(self, packed_len: int) -> None:
++        cur_len = (
++            0
++            if self._dirty_packed_cpu is None
++            else int(self._dirty_packed_cpu.numel())
++        )
++        if cur_len >= packed_len:
++            return
++
++        new_len = 1 << (packed_len - 1).bit_length()
++        self._dirty_packed_cpu = torch.empty(
++            new_len,
++            dtype=torch.int32,
++            device="cpu",
++            pin_memory=self.pin_memory,
++        )
++        self._dirty_packed_gpu = torch.empty(
++            new_len,
++            dtype=torch.int32,
++            device=self.device,
++        )
++
++    def _try_commit_dirty_updates(self, num_reqs: int) -> bool:
++        n_updates = len(self._dirty_rows)
++        n_values = len(self._dirty_values)
++        if n_updates == 0 or n_values == 0:
++            self._clear_dirty_updates()
++            return True
++
++        packed_meta_len = 3 * n_updates
++        packed_len = packed_meta_len + n_values
++        full_copy_elems = num_reqs * self.max_num_blocks_per_req
++        if packed_len >= full_copy_elems:
++            ccbench_instant(
++                "ccbench.block_table.dirty_update.fallback",
++                {
++                    "reason": "packed_not_smaller",
++                    "num_updates": n_updates,
++                    "num_values": n_values,
++                    "packed_bytes": packed_len * 4,
++                    "full_copy_bytes": full_copy_elems * 4,
++                },
++            )
++            return False
++
++        self._ensure_dirty_update_buffer(packed_len)
++        assert self._dirty_packed_cpu is not None
++        assert self._dirty_packed_gpu is not None
++        packed_cpu = self._dirty_packed_cpu[:packed_len]
++        packed_gpu = self._dirty_packed_gpu[:packed_len]
++
++        for i, (row, start, cu_len) in enumerate(
++            zip(self._dirty_rows, self._dirty_starts, self._dirty_cu_lens)
++        ):
++            offset = 3 * i
++            packed_cpu[offset] = row
++            packed_cpu[offset + 1] = start
++            packed_cpu[offset + 2] = cu_len
++        packed_cpu[packed_meta_len:packed_len] = torch.tensor(
++            self._dirty_values,
++            dtype=torch.int32,
++            device="cpu",
++        )
++
++        with ccbench_span(
++            "ccbench.metadata.copy_to_gpu",
++            {
++                "object_name": "block_table_dirty_update_packed",
++                "source": "packed_dirty_update",
++                "phase": "prepare_inputs",
++                "bytes": packed_len * 4,
++                "dtype": "torch.int32",
++                "pin_memory": self.pin_memory,
++                "num_updates": n_updates,
++                "num_values": n_values,
++                "full_copy_bytes_avoided": max(0, (full_copy_elems - packed_len) * 4),
++            },
++        ):
++            packed_gpu.copy_(packed_cpu, non_blocking=True)
++
++        with ccbench_span(
++            "ccbench.block_table.dirty_update.apply",
++            {
++                "num_updates": n_updates,
++                "num_values": n_values,
++                "packed_bytes": packed_len * 4,
++                "full_copy_bytes_avoided": max(0, (full_copy_elems - packed_len) * 4),
++            },
++        ):
++            _apply_block_table_dirty_update_kernel[(n_updates,)](
++                self.block_table.gpu,
++                self.block_table.gpu.stride(0),
++                packed_gpu,
++                packed_meta_len,
++                BLOCK_SIZE=1024,
++            )
++
++        ccbench_instant(
++            "ccbench.block_table.dirty_update.summary",
++            {
++                "num_updates": n_updates,
++                "num_values": n_values,
++                "packed_bytes": packed_len * 4,
++                "full_copy_bytes_avoided": max(0, (full_copy_elems - packed_len) * 4),
++            },
++        )
++        self._clear_dirty_updates()
++        return True
+ 
+     @staticmethod
+     def map_to_kernel_blocks(
+@@ -231,10 +416,17 @@ class BlockTable:
+         return self.block_table.np
+ 
+     def _make_buffer(
+-        self, *size: int | torch.SymInt, dtype: torch.dtype
++        self,
++        *size: int | torch.SymInt,
++        dtype: torch.dtype,
++        name: str | None = None,
+     ) -> CpuGpuBuffer:
+         return CpuGpuBuffer(
+-            *size, dtype=dtype, device=self.device, pin_memory=self.pin_memory
++            *size,
++            dtype=dtype,
++            device=self.device,
++            pin_memory=self.pin_memory,
++            buffer_name=name,
+         )
+ 
+ 
+@@ -396,3 +588,28 @@ def _compute_slot_mapping_kernel(
+         slot_ids = block_numbers * block_size + local_block_offsets
+         slot_ids = tl.where(is_local, slot_ids, PAD_ID)
+         tl.store(slot_mapping_ptr + offsets, slot_ids, mask=mask)
++
++
++@triton.jit
++def _apply_block_table_dirty_update_kernel(
++    block_table_ptr,
++    block_table_stride,
++    packed_updates_ptr,
++    values_offset,
++    BLOCK_SIZE: tl.constexpr,
++):
++    update_idx = tl.program_id(0)
++    meta_offset = update_idx * 3
++    row_idx = tl.load(packed_updates_ptr + meta_offset)
++    start_idx = tl.load(packed_updates_ptr + meta_offset + 1)
++    cu_end = tl.load(packed_updates_ptr + meta_offset + 2)
++    cu_start = tl.load(packed_updates_ptr + meta_offset - 1) if update_idx > 0 else 0
++    update_len = cu_end - cu_start
++
++    row_ptr = block_table_ptr + row_idx * block_table_stride + start_idx
++    values_ptr = packed_updates_ptr + values_offset + cu_start
++    for i in range(0, update_len, BLOCK_SIZE):
++        offsets = i + tl.arange(0, BLOCK_SIZE)
++        mask = offsets < update_len
++        values = tl.load(values_ptr + offsets, mask=mask)
++        tl.store(row_ptr + offsets, values, mask=mask)
+diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
+index 4ae5f8922..073ec494e 100644
+--- a/vllm/v1/worker/gpu_model_runner.py
++++ b/vllm/v1/worker/gpu_model_runner.py
+@@ -145,6 +145,11 @@ from vllm.v1.attention.backends.utils import (
+     get_dcp_local_seq_lens,
+     reorder_batch_to_split_decodes_and_prefills,
+ )
++from vllm.v1.ccbench_instrumentation import (
++    ccbench_instant,
++    ccbench_span,
++    tensor_shape,
++)
+ from vllm.v1.core.sched.output import NewRequestData
+ from vllm.v1.cudagraph_dispatcher import CudagraphDispatcher
+ from vllm.v1.kv_cache_interface import (
+@@ -272,6 +277,83 @@ def _cc_uniform_mtp_spec_metadata_kernel(
+     tl.store(target_logits_indices + offs, target, mask=draft_mask)
+ 
+ 
++@triton.jit
++def _cc_uniform_mtp_decode_metadata_kernel(
++    query_start_loc,
++    req_indices,
++    query_pos,
++    num_scheduled_tokens,
++    discard_request_mask,
++    num_decode_draft_tokens,
++    prev_num_draft_tokens,
++    prev_positions,
++    num_computed_tokens,
++    num_accepted_tokens,
++    valid_sampled_token_count,
++    num_reqs,
++    total_num_scheduled_tokens,
++    query_start_loc_len,
++    BLOCK_SIZE: tl.constexpr,
++    K_DRAFT: tl.constexpr,
++    K_SAMPLED: tl.constexpr,
++):
++    offs = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
++
++    token_mask = offs < total_num_scheduled_tokens
++    req = offs // K_SAMPLED
++    pos = offs - req * K_SAMPLED
++    tl.store(req_indices + offs, req, mask=token_mask)
++    tl.store(query_pos + offs, pos, mask=token_mask)
++
++    qsl_mask = offs < query_start_loc_len
++    capped_req = tl.minimum(offs, num_reqs)
++    tl.store(query_start_loc + offs, capped_req * K_SAMPLED, mask=qsl_mask)
++
++    req_mask = offs < num_reqs
++    tl.store(num_scheduled_tokens + offs, K_SAMPLED, mask=req_mask)
++    tl.store(discard_request_mask + offs, 0, mask=req_mask)
++    tl.store(num_decode_draft_tokens + offs, K_DRAFT, mask=req_mask)
++    tl.store(prev_num_draft_tokens + offs, K_DRAFT, mask=req_mask)
++    tl.store(prev_positions + offs, offs, mask=req_mask)
++
++    valid_count = tl.load(valid_sampled_token_count + offs, mask=req_mask, other=0)
++    prev_computed = tl.load(num_computed_tokens + offs, mask=req_mask, other=0)
++    tl.store(num_computed_tokens + offs, prev_computed + valid_count, mask=req_mask)
++    tl.store(num_accepted_tokens + offs, valid_count, mask=req_mask)
++
++
++@triton.jit
++def _cc_uniform_mtp_input_ids_kernel(
++    input_ids,
++    prev_sampled_token_ids,
++    draft_token_ids,
++    num_reqs,
++    sampled_stride0: tl.constexpr,
++    draft_stride0: tl.constexpr,
++    BLOCK_SIZE: tl.constexpr,
++    K_DRAFT: tl.constexpr,
++    K_SAMPLED: tl.constexpr,
++):
++    offs = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
++    total = num_reqs * K_SAMPLED
++    mask = offs < total
++    req = offs // K_SAMPLED
++    pos = offs - req * K_SAMPLED
++
++    sampled = tl.load(
++        prev_sampled_token_ids + req * sampled_stride0,
++        mask=mask,
++        other=0,
++    )
++    draft = tl.load(
++        draft_token_ids + req * draft_stride0 + (pos - 1),
++        mask=mask & (pos > 0),
++        other=0,
++    )
++    token_id = tl.where(pos == 0, sampled, draft)
++    tl.store(input_ids + offs, token_id, mask=mask)
++
++
+ # Wrapper for ModelRunnerOutput to support overlapped execution.
+ class AsyncGPUModelRunnerOutput(AsyncModelRunnerOutput):
+     def __init__(
+@@ -431,6 +513,9 @@ class CCOutputPublication:
+         self._error = error
+         self._done.set()
+ 
++    def done(self) -> bool:
++        return self._done.is_set()
++
+     def result(self) -> CCOutputPublicationResult:
+         self._done.wait()
+         if self._error is not None:
+@@ -439,6 +524,15 @@ class CCOutputPublication:
+         return self._result
+ 
+ 
++@dataclass
++class CCSpecDecodeCpuCorrectionItem:
++    req_id: str
++    optimistic_num_accepted: int
++    prev_req_index: int | None
++    output_len_after_optimistic: int
++    num_computed_after_optimistic: int
++
++
+ @dataclass
+ class CCOutputPublicationTask:
+     sampled_token_ids: torch.Tensor
+@@ -973,6 +1067,7 @@ class GPUModelRunner(
+         self._cc_decode_metadata_arange_i64_gpu: torch.Tensor | None = None
+         self._cc_decode_metadata_fast_ready_req_ids: tuple[str, ...] | None = None
+         self._cc_decode_metadata_has_logged_engaged = False
++        self._cc_mtp_decode_metadata_has_logged_engaged = False
+         self._cc_mtp_cu_num_draft_tokens_gpu: torch.Tensor | None = None
+         self._cc_mtp_cu_num_sampled_tokens_gpu: torch.Tensor | None = None
+         self._cc_mtp_logits_indices_gpu: torch.Tensor | None = None
+@@ -1021,12 +1116,14 @@ class GPUModelRunner(
+         self._encoder_timing_lock = threading.Lock()
+ 
+         # Persistent buffers for CUDA graphs.
+-        self.input_ids = self._make_buffer(self.max_num_tokens, dtype=torch.int32)
++        self.input_ids = self._make_buffer(
++            self.max_num_tokens, dtype=torch.int32, name="input_ids"
++        )
+         self.positions = torch.zeros(
+             self.max_num_tokens, dtype=torch.int64, device=self.device
+         )
+         self.query_start_loc = self._make_buffer(
+-            self.max_num_reqs + 1, dtype=torch.int32
++            self.max_num_reqs + 1, dtype=torch.int32, name="query_start_loc"
+         )
+         self.seq_lens = torch.zeros(
+             self.max_num_reqs, dtype=torch.int32, device=self.device
+@@ -1038,35 +1135,47 @@ class GPUModelRunner(
+             self.max_num_reqs, dtype=torch.int32, device=self.device
+         )
+         self.prev_num_draft_tokens = self._make_buffer(
+-            self.max_num_reqs, dtype=torch.int32
++            self.max_num_reqs, dtype=torch.int32, name="prev_num_draft_tokens"
++        )
++        self.req_indices = self._make_buffer(
++            self.max_num_tokens, dtype=torch.int64, name="req_indices"
+         )
+-        self.req_indices = self._make_buffer(self.max_num_tokens, dtype=torch.int64)
+         # Maps current batch position -> previous batch position (-1 for new reqs)
+-        self.prev_positions = self._make_buffer(self.max_num_reqs, dtype=torch.int64)
++        self.prev_positions = self._make_buffer(
++            self.max_num_reqs, dtype=torch.int64, name="prev_positions"
++        )
+         self.num_scheduled_tokens = self._make_buffer(
+-            self.max_num_reqs, dtype=torch.int32
++            self.max_num_reqs, dtype=torch.int32, name="num_scheduled_tokens"
+         )
+ 
+-        self.encoder_seq_lens = self._make_buffer(self.max_num_reqs, dtype=torch.int32)
++        self.encoder_seq_lens = self._make_buffer(
++            self.max_num_reqs, dtype=torch.int32, name="encoder_seq_lens"
++        )
+         if self.dcp_world_size > 1:
+             self.dcp_local_seq_lens = self._make_buffer(
+-                self.max_num_reqs, dtype=torch.int32
++                self.max_num_reqs, dtype=torch.int32, name="dcp_local_seq_lens"
+             )
+         # Because inputs_embeds may be bfloat16 and we don't need a numpy
+         # version of this tensor, avoid a RuntimeError by not creating a
+         # numpy buffer.
+         self.inputs_embeds = self._make_buffer(
+-            self.max_num_tokens, self.inputs_embeds_size, dtype=self.dtype, numpy=False
++            self.max_num_tokens,
++            self.inputs_embeds_size,
++            dtype=self.dtype,
++            numpy=False,
++            name="inputs_embeds",
++        )
++        self.is_token_ids = self._make_buffer(
++            self.max_num_tokens, dtype=torch.bool, name="is_token_ids"
+         )
+-        self.is_token_ids = self._make_buffer(self.max_num_tokens, dtype=torch.bool)
+         self.discard_request_mask = self._make_buffer(
+-            self.max_num_reqs, dtype=torch.bool
++            self.max_num_reqs, dtype=torch.bool, name="discard_request_mask"
+         )
+         self.num_decode_draft_tokens = self._make_buffer(
+-            self.max_num_reqs, dtype=torch.int32
++            self.max_num_reqs, dtype=torch.int32, name="num_decode_draft_tokens"
+         )
+         self.num_accepted_tokens = self._make_buffer(
+-            self.max_num_reqs, dtype=torch.int32
++            self.max_num_reqs, dtype=torch.int32, name="num_accepted_tokens"
+         )
+ 
+         # Only relevant for models using M-RoPE (e.g, Qwen2-VL)
+@@ -1082,14 +1191,18 @@ class GPUModelRunner(
+             # 1D-RoPE.
+             # See page 5 of https://arxiv.org/abs/2409.12191
+             self.mrope_positions = self._make_buffer(
+-                (3, self.max_num_tokens + 1), dtype=torch.int64
++                (3, self.max_num_tokens + 1),
++                dtype=torch.int64,
++                name="mrope_positions",
+             )
+ 
+         # Only relevant for models using XD-RoPE (e.g, HunYuan-VL)
+         if self.uses_xdrope_dim > 0:
+             # Similar to mrope but use assigned dimension number for RoPE, 4 as default.
+             self.xdrope_positions = self._make_buffer(
+-                (self.uses_xdrope_dim, self.max_num_tokens + 1), dtype=torch.int64
++                (self.uses_xdrope_dim, self.max_num_tokens + 1),
++                dtype=torch.int64,
++                name="xdrope_positions",
+             )
+ 
+         # None in the first PP rank. The rest are set after load_model.
+@@ -1101,7 +1214,9 @@ class GPUModelRunner(
+         # - query_pos: CpuGpuBuffer for the computed batched arange result
+         arange_size = max(self.max_num_reqs + 1, self.max_num_tokens)
+         self.arange_np = np.arange(arange_size, dtype=np.int64)
+-        self.query_pos = self._make_buffer(arange_size, dtype=torch.int64)
++        self.query_pos = self._make_buffer(
++            arange_size, dtype=torch.int64, name="query_pos"
++        )
+         self._arange_scratch = np.empty(arange_size, dtype=np.int64)
+ 
+         # Layer pairings for cross-layer KV sharing.
+@@ -1206,7 +1321,9 @@ class GPUModelRunner(
+         self.mamba_prev_last_scheduled_idx: CpuGpuBuffer | None = None
+         if self.cache_config.mamba_cache_mode == "all" and self.num_spec_tokens > 0:
+             self.mamba_prev_last_scheduled_idx = self._make_buffer(
+-                self.max_num_reqs, dtype=torch.int32
++                self.max_num_reqs,
++                dtype=torch.int32,
++                name="mamba_prev_last_scheduled_idx",
+             )
+         self.layerwise_nvtx_hooks_registered = False
+ 
+@@ -1297,13 +1414,18 @@ class GPUModelRunner(
+             return self.positions[num_tokens]
+ 
+     def _make_buffer(
+-        self, *size: int | torch.SymInt, dtype: torch.dtype, numpy: bool = True
++        self,
++        *size: int | torch.SymInt,
++        dtype: torch.dtype,
++        numpy: bool = True,
++        name: str | None = None,
+     ) -> CpuGpuBuffer:
+         return CpuGpuBuffer(
+             *size,
+             dtype=dtype,
+             device=self.device,
+             with_numpy=numpy,
++            buffer_name=name,
+         )
+ 
+     def _get_mamba_bufs(self) -> mamba_utils.MambaBuffers:
+@@ -1452,6 +1574,93 @@ class GPUModelRunner(
+             return False
+         return True
+ 
++    def _apply_spec_decode_cpu_count_correction(
++        self,
++        *,
++        items: list[CCSpecDecodeCpuCorrectionItem],
++        valid_sampled_token_count: Sequence[int],
++        source: str,
++        is_ngram_gpu: bool,
++    ) -> None:
++        total_optimistic = 0
++        total_actual_accepted = 0
++        total_correction = 0
++        applied_req_states = 0
++        applied_input_batch = 0
++        stale_req_states = 0
++        stale_input_batch = 0
++        missing_prev_index = 0
++        missing_current_req = 0
++
++        for item in items:
++            total_optimistic += item.optimistic_num_accepted
++            prev_req_index = item.prev_req_index
++            if (
++                prev_req_index is None
++                or prev_req_index >= len(valid_sampled_token_count)
++            ):
++                missing_prev_index += 1
++                continue
++
++            num_accepted = max(int(valid_sampled_token_count[prev_req_index]) - 1, 0)
++            total_actual_accepted += num_accepted
++            correction = item.optimistic_num_accepted - num_accepted
++            if correction <= 0:
++                continue
++            total_correction += correction
++
++            req_state = self.requests.get(item.req_id)
++            if req_state is not None:
++                if req_state.num_computed_tokens == item.num_computed_after_optimistic:
++                    req_state.num_computed_tokens -= correction
++                    applied_req_states += 1
++                else:
++                    stale_req_states += 1
++            else:
++                missing_current_req += 1
++
++            cur_req_index = self.input_batch.req_id_to_index.get(item.req_id)
++            if cur_req_index is not None:
++                current_num_computed = int(
++                    self.input_batch.num_computed_tokens_cpu[cur_req_index]
++                )
++                if current_num_computed == item.num_computed_after_optimistic:
++                    self.input_batch.num_computed_tokens_cpu[cur_req_index] -= (
++                        correction
++                    )
++                    applied_input_batch += 1
++                    if is_ngram_gpu:
++                        self.input_batch.num_tokens_no_spec[cur_req_index] -= (
++                            correction
++                        )
++                        self.num_tokens_no_spec_gpu[cur_req_index] -= correction
++                else:
++                    stale_input_batch += 1
++
++        block_size = self.cache_config.block_size or CacheConfig.DEFAULT_BLOCK_SIZE
++        ccbench_instant(
++            "ccbench.spec.accepted_count.cpu_correction.applied",
++            {
++                "source": source,
++                "num_items": len(items),
++                "total_optimistic_accepted": total_optimistic,
++                "total_actual_accepted": total_actual_accepted,
++                "estimated_wasted_kv_tokens": total_correction,
++                "estimated_wasted_kv_blocks_upper_bound": cdiv(
++                    total_correction, block_size
++                ),
++                "kv_block_size": block_size,
++                "kv_cache_groups": len(self.kv_cache_config.kv_cache_groups),
++                "applied_req_states": applied_req_states,
++                "applied_input_batch": applied_input_batch,
++                "stale_req_states": stale_req_states,
++                "stale_input_batch": stale_input_batch,
++                "missing_prev_index": missing_prev_index,
++                "missing_current_req": missing_current_req,
++                "is_ngram_gpu": is_ngram_gpu,
++                },
++            )
++
+     def _update_states(self, scheduler_output: "SchedulerOutput") -> Callable | None:
+         """Update the cached states and the persistent batch with the scheduler
+         output.
+@@ -1517,7 +1726,9 @@ class GPUModelRunner(
+             ngram_gpu_new_reqs: list[CachedRequestState] = []
+ 
+         reqs_to_add: list[CachedRequestState] = []
+-        deferred_spec_decode_corrections = []
++        deferred_spec_decode_corrections: list[
++            CCSpecDecodeCpuCorrectionItem
++        ] = []
+ 
+         # Add new requests to the cached states.
+         for new_req_data in scheduler_output.scheduled_new_reqs:
+@@ -1640,15 +1851,22 @@ class GPUModelRunner(
+                     optimistic_num_accepted = req_state.prev_num_draft_len
+                     req_state.output_token_ids.extend([-1] * optimistic_num_accepted)
+ 
+-                    deferred_spec_decode_corrections.append(
+-                        (req_id, optimistic_num_accepted, req_state)
+-                    )
+-
+                     prev_req_index = (
+                         self.input_batch.prev_req_id_to_index.get(req_id)
+                         if self.input_batch.prev_req_id_to_index
+                         else None
+                     )
++                    deferred_spec_decode_corrections.append(
++                        CCSpecDecodeCpuCorrectionItem(
++                            req_id=req_id,
++                            optimistic_num_accepted=optimistic_num_accepted,
++                            prev_req_index=prev_req_index,
++                            output_len_after_optimistic=len(
++                                req_state.output_token_ids
++                            ),
++                            num_computed_after_optimistic=num_computed_tokens,
++                        )
++                    )
+                     if prev_req_index is not None:
+                         self.prev_num_draft_tokens.np[prev_req_index] = (
+                             optimistic_num_accepted
+@@ -1794,29 +2012,12 @@ class GPUModelRunner(
+                 valid_sampled_token_count = self._get_valid_sampled_token_count()
+                 if not valid_sampled_token_count:
+                     return
+-                prev_req_id_to_index = self.input_batch.prev_req_id_to_index
+-                if not prev_req_id_to_index:
+-                    return
+-                for (
+-                    req_id,
+-                    optimistic_num_accepted,
+-                    req_state,
+-                ) in deferred_spec_decode_corrections:
+-                    prev_req_index = prev_req_id_to_index.get(req_id)
+-                    if prev_req_index is None:
+-                        continue
+-                    num_accepted = valid_sampled_token_count[prev_req_index] - 1
+-                    correction = optimistic_num_accepted - num_accepted
+-                    req_state.num_computed_tokens -= correction
+-                    cur_req_index = self.input_batch.req_id_to_index.get(req_id)
+-                    if cur_req_index is None:
+-                        continue
+-                    self.input_batch.num_computed_tokens_cpu[cur_req_index] -= (
+-                        correction
+-                    )
+-                    if is_ngram_gpu and correction > 0:
+-                        self.input_batch.num_tokens_no_spec[cur_req_index] -= correction
+-                        self.num_tokens_no_spec_gpu[cur_req_index] -= correction
++                self._apply_spec_decode_cpu_count_correction(
++                    items=deferred_spec_decode_corrections,
++                    valid_sampled_token_count=valid_sampled_token_count,
++                    source="blocking_cpu_count",
++                    is_ngram_gpu=is_ngram_gpu,
++                )
+ 
+             return correct_spec_decode_token_counts
+         else:
+@@ -2157,6 +2358,207 @@ class GPUModelRunner(
+         self.query_pos.gpu[:num_reqs].zero_()
+         self.num_scheduled_tokens.gpu[:num_reqs].fill_(1)
+ 
++    def _cc_uniform_mtp_decode_metadata_fastpath_k(
++        self,
++        scheduler_output: "SchedulerOutput",
++        num_scheduled_tokens: np.ndarray,
++        num_reqs: int,
++        total_num_scheduled_tokens: int,
++        prev_req_id_to_index: dict[str, int] | None,
++    ) -> int | None:
++        reason: str | None = None
++        k_draft = 0
++        scheduled_spec_tokens = scheduler_output.scheduled_spec_decode_tokens
++
++        if self.cc_decode_metadata_fastpath <= 0:
++            reason = "not_requested"
++        elif not self.use_async_spec_decode:
++            reason = "not_async_spec_decode"
++        elif not (
++            self.speculative_config is not None
++            and self.speculative_config.use_gemma4_mtp()
++        ):
++            reason = "not_gemma4_mtp"
++        elif self.uses_mrope or self.uses_xdrope_dim > 0:
++            reason = "rope_special_case"
++        elif self.enable_prompt_embeds or self.input_batch.req_prompt_embeds:
++            reason = "prompt_embeds"
++        elif (
++            self.num_accepted_tokens_event is not None
++            and self.model_config.is_hybrid
++        ):
++            reason = "accepted_token_event"
++        elif self.mamba_prev_last_scheduled_idx is not None:
++            reason = "mamba_state"
++        elif not scheduled_spec_tokens:
++            reason = "no_scheduled_spec_decode_tokens"
++        elif scheduler_output.scheduled_new_reqs or scheduler_output.finished_req_ids:
++            reason = "new_or_finished_reqs"
++        elif scheduler_output.preempted_req_ids:
++            reason = "preempted_reqs"
++        elif scheduler_output.scheduled_cached_reqs.resumed_req_ids:
++            reason = "resumed_reqs"
++        elif prev_req_id_to_index is None:
++            reason = "no_previous_batch"
++        elif self.valid_sampled_token_count_gpu is None:
++            reason = "missing_valid_sampled_token_count_gpu"
++        elif self.input_batch.prev_sampled_token_ids is None:
++            reason = "missing_prev_sampled_token_ids"
++        elif not torch.is_tensor(self._draft_token_ids):
++            reason = "draft_token_ids_not_tensor"
++        else:
++            req_ids = self.input_batch.req_ids[:num_reqs]
++            if len(scheduled_spec_tokens) != num_reqs:
++                reason = "partial_spec_batch"
++            else:
++                for idx, req_id in enumerate(req_ids):
++                    if prev_req_id_to_index.get(req_id) != idx:
++                        reason = "batch_order_changed"
++                        break
++                    draft_token_ids = scheduled_spec_tokens.get(req_id)
++                    if draft_token_ids is None:
++                        reason = "missing_req_spec_tokens"
++                        break
++                    draft_len = len(draft_token_ids)
++                    if draft_len <= 0:
++                        reason = "empty_req_spec_tokens"
++                        break
++                    if k_draft == 0:
++                        k_draft = draft_len
++                    elif draft_len != k_draft:
++                        reason = "non_uniform_draft_count"
++                        break
++
++        if reason is None:
++            k_sampled = k_draft + 1
++            if total_num_scheduled_tokens != num_reqs * k_sampled:
++                reason = "total_scheduled_tokens_mismatch"
++            elif not np.all(num_scheduled_tokens[:num_reqs] == k_sampled):
++                reason = "per_request_scheduled_tokens_mismatch"
++            elif k_draft > self.num_spec_tokens:
++                reason = "draft_count_exceeds_config"
++            elif total_num_scheduled_tokens > self.max_num_tokens:
++                reason = "too_many_scheduled_tokens"
++            elif (
++                self.valid_sampled_token_count_gpu is not None
++                and self.valid_sampled_token_count_gpu.shape[0] < num_reqs
++            ):
++                reason = "valid_count_batch_too_small"
++            elif (
++                torch.is_tensor(self._draft_token_ids)
++                and self._draft_token_ids.shape[0] < num_reqs
++            ):
++                reason = "draft_token_batch_too_small"
++            else:
++                num_computed = self.input_batch.num_computed_tokens_cpu[:num_reqs]
++                num_prompt = self.input_batch.num_prompt_tokens[:num_reqs]
++                if not bool(np.all(num_computed >= num_prompt)):
++                    reason = "not_all_decode"
++
++        if reason is not None:
++            if (
++                self.cc_decode_metadata_fastpath > 0
++                and self.use_async_spec_decode
++                and scheduled_spec_tokens
++            ):
++                ccbench_instant(
++                    "ccbench.metadata.mtp_decode_fastpath.fallback",
++                    {
++                        "reason": reason,
++                        "num_reqs": int(num_reqs),
++                        "total_num_scheduled_tokens": int(
++                            total_num_scheduled_tokens
++                        ),
++                        "scheduled_spec_reqs": len(scheduled_spec_tokens),
++                        "k_draft": int(k_draft),
++                    },
++                )
++            return None
++
++        return k_draft
++
++    def _prepare_cc_uniform_mtp_decode_static_metadata(
++        self,
++        num_reqs: int,
++        total_num_scheduled_tokens: int,
++        k_draft: int,
++    ) -> None:
++        assert self.valid_sampled_token_count_gpu is not None
++        k_sampled = k_draft + 1
++
++        if not self._cc_mtp_decode_metadata_has_logged_engaged:
++            logger.info(
++                "VLLM_CC_DECODE_METADATA_FASTPATH MTP engaged: "
++                "batch=%d k=%d",
++                num_reqs,
++                k_draft,
++            )
++            self._cc_mtp_decode_metadata_has_logged_engaged = True
++
++        self.query_start_loc.np[: num_reqs + 1] = (
++            self.arange_np[: num_reqs + 1] * k_sampled
++        )
++        self.query_start_loc.np[num_reqs + 1 :].fill(total_num_scheduled_tokens)
++        self.req_indices.np[:total_num_scheduled_tokens] = np.repeat(
++            self.arange_np[:num_reqs], k_sampled
++        )
++        self.query_pos.np[:total_num_scheduled_tokens] = np.tile(
++            self.arange_np[:k_sampled], num_reqs
++        )
++        self.discard_request_mask.np[:num_reqs] = False
++        self.num_scheduled_tokens.np[:num_reqs] = k_sampled
++        self.num_decode_draft_tokens.np[:num_reqs] = k_draft
++        self.num_decode_draft_tokens.np[num_reqs:].fill(-1)
++        self.prev_num_draft_tokens.np[:num_reqs] = k_draft
++        self.prev_num_draft_tokens.np[num_reqs:].fill(0)
++        self.prev_positions.np[:num_reqs] = self.arange_np[:num_reqs]
++
++        bytes_avoided = (
++            (self.max_num_reqs + 1) * 4
++            + total_num_scheduled_tokens * 8
++            + total_num_scheduled_tokens * 8
++            + num_reqs * 4
++            + num_reqs
++            + num_reqs * 4
++            + num_reqs * 8
++            + num_reqs * 4
++            + num_reqs * 4
++        )
++        with ccbench_span(
++            "ccbench.metadata.mtp_decode_fastpath.engaged",
++            {
++                "num_reqs": int(num_reqs),
++                "k_draft": int(k_draft),
++                "total_num_scheduled_tokens": int(total_num_scheduled_tokens),
++                "bytes_avoided_estimate": int(bytes_avoided),
++                "valid_count_shape": tensor_shape(
++                    self.valid_sampled_token_count_gpu
++                ),
++            },
++        ):
++            block_size = 1024
++            work = max(total_num_scheduled_tokens, self.max_num_reqs + 1)
++            grid = (cdiv(work, block_size),)
++            _cc_uniform_mtp_decode_metadata_kernel[grid](
++                self.query_start_loc.gpu,
++                self.req_indices.gpu,
++                self.query_pos.gpu,
++                self.num_scheduled_tokens.gpu,
++                self.discard_request_mask.gpu,
++                self.num_decode_draft_tokens.gpu,
++                self.prev_num_draft_tokens.gpu,
++                self.prev_positions.gpu,
++                self.num_computed_tokens,
++                self.num_accepted_tokens.gpu,
++                self.valid_sampled_token_count_gpu,
++                num_reqs,
++                total_num_scheduled_tokens,
++                self.max_num_reqs + 1,
++                BLOCK_SIZE=block_size,
++                K_DRAFT=k_draft,
++                K_SAMPLED=k_sampled,
++            )
++
+     def _compute_prev_positions(self, num_reqs: int) -> None:
+         """Build prev_positions mapping: current pos -> previous pos (-1 if new).
+ 
+@@ -2178,6 +2580,7 @@ class GPUModelRunner(
+         num_reqs: int,
+         total_num_scheduled_tokens: int,
+         cu_num_tokens: np.ndarray,
++        cc_uniform_mtp_decode_k: int | None = None,
+     ) -> None:
+         """Prepare the input IDs for the current batch.
+ 
+@@ -2200,6 +2603,69 @@ class GPUModelRunner(
+         # Async scheduling case, where some decode requests from the previous
+         # iteration won't have entries in input_ids_cpu and need to be copied
+         # on the GPU from prev_sampled_token_ids.
++        if cc_uniform_mtp_decode_k is not None:
++            k_draft = cc_uniform_mtp_decode_k
++            k_sampled = k_draft + 1
++            prev_sampled_token_ids = self.input_batch.prev_sampled_token_ids
++            draft_token_ids = self._draft_token_ids
++            fallback_reason = None
++            if not torch.is_tensor(draft_token_ids):
++                fallback_reason = "draft_token_ids_not_tensor"
++            elif draft_token_ids.ndim < 2:
++                fallback_reason = "draft_token_ids_rank"
++            elif draft_token_ids.shape[0] < num_reqs:
++                fallback_reason = "draft_token_batch_too_small"
++            elif draft_token_ids.shape[1] < k_draft:
++                fallback_reason = "draft_token_width_too_small"
++            elif prev_sampled_token_ids.shape[0] < num_reqs:
++                fallback_reason = "prev_sampled_batch_too_small"
++            elif total_num_scheduled_tokens != num_reqs * k_sampled:
++                fallback_reason = "total_scheduled_tokens_mismatch"
++
++            if fallback_reason is None:
++                assert torch.is_tensor(draft_token_ids)
++                with ccbench_span(
++                    "ccbench.metadata.mtp_input_ids_fastpath.engaged",
++                    {
++                        "num_reqs": int(num_reqs),
++                        "k_draft": int(k_draft),
++                        "total_num_scheduled_tokens": int(
++                            total_num_scheduled_tokens
++                        ),
++                        "sampled_token_ids_shape": tensor_shape(
++                            prev_sampled_token_ids
++                        ),
++                        "draft_token_ids_shape": tensor_shape(draft_token_ids),
++                        "bytes_avoided_estimate": int(
++                            8 * (2 * num_reqs + 2 * num_reqs * k_draft)
++                        ),
++                    },
++                ):
++                    block_size = 1024
++                    grid = (cdiv(total_num_scheduled_tokens, block_size),)
++                    _cc_uniform_mtp_input_ids_kernel[grid](
++                        self.input_ids.gpu,
++                        prev_sampled_token_ids,
++                        draft_token_ids,
++                        num_reqs,
++                        sampled_stride0=prev_sampled_token_ids.stride(0),
++                        draft_stride0=draft_token_ids.stride(0),
++                        BLOCK_SIZE=block_size,
++                        K_DRAFT=k_draft,
++                        K_SAMPLED=k_sampled,
++                    )
++                return
++
++            ccbench_instant(
++                "ccbench.metadata.mtp_input_ids_fastpath.fallback",
++                {
++                    "reason": fallback_reason,
++                    "num_reqs": int(num_reqs),
++                    "k_draft": int(k_draft),
++                    "total_num_scheduled_tokens": int(total_num_scheduled_tokens),
++                },
++            )
++
+         prev_positions = self.prev_positions.np[:num_reqs]
+         scheduled_spec_tokens = scheduler_output.scheduled_spec_decode_tokens
+         sample_flattened_indices: list[int] = []
+@@ -2379,6 +2845,14 @@ class GPUModelRunner(
+             num_scheduled_tokens, self.query_pos.np
+         )
+         prev_req_id_to_index = self.input_batch.prev_req_id_to_index
++        cc_uniform_mtp_decode_k = self._cc_uniform_mtp_decode_metadata_fastpath_k(
++            scheduler_output,
++            num_scheduled_tokens,
++            num_reqs,
++            total_num_scheduled_tokens,
++            prev_req_id_to_index,
++        )
++        cc_mtp_decode_metadata_fastpath = cc_uniform_mtp_decode_k is not None
+         cc_decode_metadata_primeable = self._cc_uniform_decode_metadata_primeable(
+             scheduler_output,
+             num_scheduled_tokens,
+@@ -2396,6 +2870,9 @@ class GPUModelRunner(
+                 prev_req_id_to_index,
+             )
+         )
++        cc_decode_metadata_fastpath = (
++            cc_decode_metadata_fastpath or cc_mtp_decode_metadata_fastpath
++        )
+ 
+         if not cc_decode_metadata_fastpath:
+             # Get positions.
+@@ -2481,7 +2958,14 @@ class GPUModelRunner(
+                     output_idx += num_sched
+ 
+         # Prepare the attention metadata.
+-        if cc_decode_metadata_fastpath:
++        if cc_mtp_decode_metadata_fastpath:
++            assert cc_uniform_mtp_decode_k is not None
++            self._prepare_cc_uniform_mtp_decode_static_metadata(
++                num_reqs,
++                total_num_scheduled_tokens,
++                cc_uniform_mtp_decode_k,
++            )
++        elif cc_decode_metadata_fastpath:
+             self._prepare_cc_uniform_decode_static_metadata(num_reqs)
+         else:
+             self.query_start_loc.np[0] = 0
+@@ -2522,8 +3006,13 @@ class GPUModelRunner(
+         # _update_states_after_model_execute for hybrid models).
+         # Skipped under async scheduling (non-align): the CPU copy races with
+         # the in-flight D2H copy and with input-batch row moves.
+-        needs_cpu_accepted_counts = self.num_accepted_tokens_event is not None and not (
+-            self.use_async_scheduling and self.cache_config.mamba_cache_mode != "align"
++        needs_cpu_accepted_counts = (
++            self.num_accepted_tokens_event is not None
++            and not cc_mtp_decode_metadata_fastpath
++            and not (
++                self.use_async_scheduling
++                and self.cache_config.mamba_cache_mode != "align"
++            )
+         )
+         if needs_cpu_accepted_counts:
+             assert self.num_accepted_tokens_event is not None
+@@ -2548,7 +3037,7 @@ class GPUModelRunner(
+                 )
+             self.num_accepted_tokens.np[num_reqs:].fill(1)
+             self.num_accepted_tokens.copy_to_gpu()
+-        else:
++        elif not cc_mtp_decode_metadata_fastpath:
+             # Default to 1; update_num_computed_tokens_for_batch_change below
+             # corrects rows that had drafts from valid_sampled_token_count.
+             self.num_accepted_tokens.np.fill(1)
+@@ -2567,7 +3056,9 @@ class GPUModelRunner(
+         # CPU values are optimistic (all drafts accepted). The kernel
+         # corrects on GPU using the previous step's
+         # valid_sampled_token_count_gpu. Otherwise, just copy from CPU.
+-        if cc_decode_metadata_fastpath:
++        if cc_mtp_decode_metadata_fastpath:
++            pass
++        elif cc_decode_metadata_fastpath:
+             self.num_computed_tokens[:num_reqs].add_(1)
+         elif (
+             self.use_async_spec_decode
+@@ -2576,9 +3067,20 @@ class GPUModelRunner(
+         ):
+             self.prev_positions.copy_to_gpu(num_reqs)
+             self.prev_num_draft_tokens.copy_to_gpu()
+-            cpu_values = self.input_batch.num_computed_tokens_cpu_tensor[:num_reqs].to(
+-                device=self.device, non_blocking=True
+-            )
++            with ccbench_span(
++                "ccbench.metadata.copy_to_gpu",
++                {
++                    "object_name": "num_computed_tokens_cpu_values",
++                    "source": "raw_tensor_to",
++                    "phase": "prepare_inputs",
++                    "bytes": num_reqs * 4,
++                    "dtype": "torch.int32",
++                    "pin_memory": self.pin_memory,
++                },
++            ):
++                cpu_values = self.input_batch.num_computed_tokens_cpu_tensor[
++                    :num_reqs
++                ].to(device=self.device, non_blocking=True)
+             update_num_computed_tokens_for_batch_change(
+                 self.num_computed_tokens,
+                 self.num_accepted_tokens.gpu[:num_reqs],
+@@ -2624,26 +3126,63 @@ class GPUModelRunner(
+             num_reqs,
+             total_num_scheduled_tokens,
+             cu_num_tokens,
++            cc_uniform_mtp_decode_k=cc_uniform_mtp_decode_k,
+         )
+ 
+         if self.uses_mrope:
+             # Only relevant for models using M-RoPE (e.g, Qwen2-VL)
+-            self.mrope_positions.gpu[:, :total_num_scheduled_tokens].copy_(
+-                self.mrope_positions.cpu[:, :total_num_scheduled_tokens],
+-                non_blocking=True,
+-            )
++            with ccbench_span(
++                "ccbench.metadata.copy_to_gpu",
++                {
++                    "object_name": "mrope_positions",
++                    "source": "direct_copy",
++                    "phase": "prepare_inputs",
++                    "bytes": 3 * total_num_scheduled_tokens * 8,
++                    "dtype": "torch.int64",
++                    "pin_memory": self.pin_memory,
++                },
++            ):
++                self.mrope_positions.gpu[:, :total_num_scheduled_tokens].copy_(
++                    self.mrope_positions.cpu[:, :total_num_scheduled_tokens],
++                    non_blocking=True,
++                )
+         elif self.uses_xdrope_dim > 0:
+             # Only relevant for models using XD-RoPE (e.g, HunYuan-VL)
+-            self.xdrope_positions.gpu[:, :total_num_scheduled_tokens].copy_(
+-                self.xdrope_positions.cpu[:, :total_num_scheduled_tokens],
+-                non_blocking=True,
+-            )
++            with ccbench_span(
++                "ccbench.metadata.copy_to_gpu",
++                {
++                    "object_name": "xdrope_positions",
++                    "source": "direct_copy",
++                    "phase": "prepare_inputs",
++                    "bytes": self.uses_xdrope_dim * total_num_scheduled_tokens * 8,
++                    "dtype": "torch.int64",
++                    "pin_memory": self.pin_memory,
++                },
++            ):
++                self.xdrope_positions.gpu[:, :total_num_scheduled_tokens].copy_(
++                    self.xdrope_positions.cpu[:, :total_num_scheduled_tokens],
++                    non_blocking=True,
++                )
+         if self.use_async_spec_decode and (self.uses_mrope or self.uses_xdrope_dim > 0):
++            with ccbench_span(
++                "ccbench.metadata.copy_to_gpu",
++                {
++                    "object_name": "num_computed_tokens_cpu_drift",
++                    "source": "raw_tensor_to",
++                    "phase": "prepare_inputs",
++                    "bytes": len(req_indices) * 8,
++                    "dtype": "torch.int64",
++                    "pin_memory": self.pin_memory,
++                },
++            ):
++                num_computed_tokens_cpu_drift = (
++                    self.input_batch.num_computed_tokens_cpu_tensor[req_indices].to(
++                        device=self.device, dtype=torch.int64, non_blocking=True
++                    )
++                )
+             drift = self.num_computed_tokens[req_indices_gpu].to(
+                 torch.int64
+-            ) - self.input_batch.num_computed_tokens_cpu_tensor[req_indices].to(
+-                device=self.device, dtype=torch.int64, non_blocking=True
+-            )
++            ) - num_computed_tokens_cpu_drift
+             target = self.mrope_positions if self.uses_mrope else self.xdrope_positions
+             target.gpu[:, :total_num_scheduled_tokens] += drift
+ 
+@@ -2658,31 +3197,64 @@ class GPUModelRunner(
+             spec_decode_metadata = None
+             num_sampled_tokens = np.ones(num_reqs, dtype=np.int32)
+         else:
+-            # Get the number of draft tokens for each request.
+-            # Iterate over the dictionary rather than all requests since not all
+-            # requests have draft tokens.
+-            num_draft_tokens = np.zeros(num_reqs, dtype=np.int32)
+-            # For chunked prefills, use -1 as mask rather than 0, as guided
+-            # decoding may rollback speculative tokens.
+-            num_decode_draft_tokens = np.full(num_reqs, -1, dtype=np.int32)
+-            for (
+-                req_id,
+-                draft_token_ids,
+-            ) in scheduler_output.scheduled_spec_decode_tokens.items():
+-                req_idx = self.input_batch.req_id_to_index[req_id]
+-                draft_len = len(draft_token_ids)
+-                num_draft_tokens[req_idx] = draft_len
+-                if num_scheduled_tokens[req_idx] == draft_len + 1:
+-                    num_decode_draft_tokens[req_idx] = draft_len
++            if cc_mtp_decode_metadata_fastpath:
++                assert cc_uniform_mtp_decode_k is not None
++                num_draft_tokens = np.full(
++                    num_reqs, cc_uniform_mtp_decode_k, dtype=np.int32
++                )
++                num_decode_draft_tokens = num_draft_tokens
++            else:
++                # Get the number of draft tokens for each request.
++                # Iterate over the dictionary rather than all requests since not all
++                # requests have draft tokens.
++                num_draft_tokens = np.zeros(num_reqs, dtype=np.int32)
++                # For chunked prefills, use -1 as mask rather than 0, as guided
++                # decoding may rollback speculative tokens.
++                num_decode_draft_tokens = np.full(num_reqs, -1, dtype=np.int32)
++                for (
++                    req_id,
++                    draft_token_ids,
++                ) in scheduler_output.scheduled_spec_decode_tokens.items():
++                    req_idx = self.input_batch.req_id_to_index[req_id]
++                    draft_len = len(draft_token_ids)
++                    num_draft_tokens[req_idx] = draft_len
++                    if num_scheduled_tokens[req_idx] == draft_len + 1:
++                        num_decode_draft_tokens[req_idx] = draft_len
+             spec_decode_metadata = self._calc_spec_decode_metadata(
+                 num_draft_tokens, cu_num_tokens
+             )
+             logits_indices = spec_decode_metadata.logits_indices
+             num_sampled_tokens = num_draft_tokens + 1
+             # For DECODE only cuda graph of some attention backends (e.g., GDN).
+-            self.num_decode_draft_tokens.np[:num_reqs] = num_decode_draft_tokens
+-            self.num_decode_draft_tokens.np[num_reqs:].fill(-1)
+-            self.num_decode_draft_tokens.copy_to_gpu()
++            if not cc_mtp_decode_metadata_fastpath:
++                self.num_decode_draft_tokens.np[:num_reqs] = num_decode_draft_tokens
++                self.num_decode_draft_tokens.np[num_reqs:].fill(-1)
++                self.num_decode_draft_tokens.copy_to_gpu()
++
++        ccbench_instant(
++            "ccbench.metadata.prepare_inputs.summary",
++            {
++                "num_reqs": int(num_reqs),
++                "total_num_scheduled_tokens": int(total_num_scheduled_tokens),
++                "use_spec_decode": use_spec_decode,
++                "cc_decode_metadata_fastpath": cc_decode_metadata_fastpath,
++                "cc_decode_metadata_primeable": cc_decode_metadata_primeable,
++                "cc_mtp_decode_metadata_fastpath": cc_mtp_decode_metadata_fastpath,
++                "cc_uniform_mtp_decode_k": (
++                    None
++                    if cc_uniform_mtp_decode_k is None
++                    else int(cc_uniform_mtp_decode_k)
++                ),
++                "prev_batch_common_reqs": (
++                    0 if prev_req_id_to_index is None
++                    else len(prev_req_id_to_index)
++                ),
++                "has_prev_sampled_token_ids": (
++                    self.input_batch.prev_sampled_token_ids is not None
++                ),
++                "pin_memory": self.pin_memory,
++            },
++        )
+ 
+         # Hot-Swap lora model
+         if self.lora_config:
+-- 
+2.43.0
+

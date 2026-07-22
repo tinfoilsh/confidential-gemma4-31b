@@ -14,7 +14,7 @@ trap 'rm -rf "$temporary_root"' EXIT
 git clone --shared "$source_checkout" "$temporary_root/patched"
 git clone --shared "$source_checkout" "$temporary_root/expected"
 git -C "$temporary_root/patched" checkout --detach v0.25.1
-git -C "$temporary_root/expected" checkout --detach 894b5f0f6
+git -C "$temporary_root/expected" checkout --detach 56219cc43
 
 for patch_file in "$repo_root"/patches/*.patch; do
   patch -d "$temporary_root/patched" -p1 --no-backup-if-mismatch --fuzz=0 \
@@ -26,4 +26,4 @@ diff -ru "$temporary_root/expected/vllm" "$temporary_root/patched/vllm"
 grep -q 'uses_grammar_constraint' \
   "$temporary_root/patched/vllm/sampling_params.py"
 
-echo "deployment patch series matches the minimal v0.25.1 CC candidate"
+echo "deployment patch series matches the v0.25.1 V1 CC/MTP candidate"

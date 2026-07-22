@@ -1,0 +1,184 @@
+From a8e67ebd75081473d1cec5ceeb4801a1b8c18314 Mon Sep 17 00:00:00 2001
+From: Jules Drean <jules@tinfoil.sh>
+Date: Thu, 25 Jun 2026 14:02:26 -0400
+Subject: [PATCH 113/117] cc: publish mtp accepted counts from output worker
+ early
+
+---
+ vllm/v1/worker/gpu_model_runner.py | 87 ++++++++++++++++++++++++++++--
+ 1 file changed, 82 insertions(+), 5 deletions(-)
+
+diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
+index 073ec494e..b114e1eeb 100644
+--- a/vllm/v1/worker/gpu_model_runner.py
++++ b/vllm/v1/worker/gpu_model_runner.py
+@@ -186,7 +186,10 @@ from vllm.v1.pool.metadata import PoolingMetadata, PoolingStates
+ from vllm.v1.sample.logits_processor import LogitsProcessors, build_logitsprocs
+ from vllm.v1.sample.logits_processor.interface import LogitsProcessor
+ from vllm.v1.sample.metadata import SamplingMetadata
+-from vllm.v1.sample.rejection_sampler import RejectionSampler
++from vllm.v1.sample.rejection_sampler import (
++    PLACEHOLDER_TOKEN_ID,
++    RejectionSampler,
++)
+ from vllm.v1.sample.sampler import Sampler
+ from vllm.v1.spec_decode.custom_class_proposer import create_custom_proposer
+ from vllm.v1.spec_decode.dflash import DFlashProposer
+@@ -502,20 +505,41 @@ class CCOutputPublicationResult:
+ class CCOutputPublication:
+     def __init__(self) -> None:
+         self._done = threading.Event()
++        self._valid_sampled_token_count_done = threading.Event()
+         self._result: CCOutputPublicationResult | None = None
++        self._valid_sampled_token_count: list[int] | None = None
+         self._error: BaseException | None = None
+ 
++    def set_valid_sampled_token_count(self, count: list[int]) -> None:
++        self._valid_sampled_token_count = count
++        self._valid_sampled_token_count_done.set()
++
+     def set_result(self, result: CCOutputPublicationResult) -> None:
++        if not self._valid_sampled_token_count_done.is_set():
++            self.set_valid_sampled_token_count(
++                [len(tokens) for tokens in result.sampled_token_ids]
++            )
+         self._result = result
+         self._done.set()
+ 
+     def set_error(self, error: BaseException) -> None:
+         self._error = error
++        self._valid_sampled_token_count_done.set()
+         self._done.set()
+ 
++    def valid_sampled_token_count_done(self) -> bool:
++        return self._valid_sampled_token_count_done.is_set()
++
+     def done(self) -> bool:
+         return self._done.is_set()
+ 
++    def valid_sampled_token_count_result(self) -> list[int]:
++        self._valid_sampled_token_count_done.wait()
++        if self._error is not None:
++            raise self._error
++        assert self._valid_sampled_token_count is not None
++        return self._valid_sampled_token_count
++
+     def result(self) -> CCOutputPublicationResult:
+         self._done.wait()
+         if self._error is not None:
+@@ -524,6 +548,20 @@ class CCOutputPublication:
+         return self._result
+ 
+ 
++def _calc_valid_sampled_token_count(
++    sampled_token_ids_cpu: torch.Tensor,
++    vocab_size: int,
++    invalid_req_indices: Sequence[int],
++) -> list[int]:
++    sampled_token_ids_np = sampled_token_ids_cpu.numpy()
++    valid_mask = (sampled_token_ids_np != PLACEHOLDER_TOKEN_ID) & (
++        sampled_token_ids_np < vocab_size
++    )
++    if invalid_req_indices:
++        valid_mask[list(invalid_req_indices)] = False
++    return valid_mask.sum(axis=1).tolist()
++
++
+ @dataclass
+ class CCSpecDecodeCpuCorrectionItem:
+     req_id: str
+@@ -550,9 +588,11 @@ class CCOutputPublicationWorker:
+         *,
+         device: torch.device,
+         pin_memory: bool,
++        fast_count_publication: bool,
+     ) -> None:
+         self.device = device
+         self.pin_memory = pin_memory
++        self.fast_count_publication = fast_count_publication
+         self._queue: queue.Queue[CCOutputPublicationTask | None] = queue.Queue()
+         self._thread = threading.Thread(
+             target=self._run,
+@@ -620,6 +660,15 @@ class CCOutputPublicationWorker:
+                     )
+                 copy_stream.synchronize()
+                 max_gen_len = sampled_token_ids_cpu.shape[-1]
++                if self.fast_count_publication:
++                    valid_sampled_token_count = _calc_valid_sampled_token_count(
++                        sampled_token_ids_cpu,
++                        task.vocab_size,
++                        task.invalid_req_indices,
++                    )
++                    task.publication.set_valid_sampled_token_count(
++                        valid_sampled_token_count
++                    )
+                 if max_gen_len == 1:
+                     sampled_token_ids = sampled_token_ids_cpu.tolist()
+                     for i in task.invalid_req_indices:
+@@ -1092,6 +1141,24 @@ class GPUModelRunner(
+             )
+         if self.cc_output_worker_enabled:
+             logger.info("Using experimental CC output publication worker.")
++        cc_spec_count_fast_publication_requested = bool(
++            int(os.environ.get("VLLM_CC_SPEC_COUNT_FAST_PUBLICATION", "0") or "0")
++        )
++        self.cc_spec_count_fast_publication_enabled = (
++            cc_spec_count_fast_publication_requested and self.cc_output_worker_enabled
++        )
++        if (
++            cc_spec_count_fast_publication_requested
++            and not self.cc_output_worker_enabled
++        ):
++            logger.info(
++                "Ignoring VLLM_CC_SPEC_COUNT_FAST_PUBLICATION because the "
++                "confidential-compute output worker is not enabled."
++            )
++        if self.cc_spec_count_fast_publication_enabled:
++            logger.info(
++                "Using experimental CC worker-managed spec count fast publication."
++            )
+         self._cc_output_publication_worker: CCOutputPublicationWorker | None = None
+         self._cc_valid_sampled_token_count_publication: (
+             CCOutputPublication | None
+@@ -1557,6 +1624,7 @@ class GPUModelRunner(
+             worker = CCOutputPublicationWorker(
+                 device=self.device,
+                 pin_memory=self.pin_memory,
++                fast_count_publication=self.cc_spec_count_fast_publication_enabled,
+             )
+             self._cc_output_publication_worker = worker
+         return worker
+@@ -1658,8 +1726,17 @@ class GPUModelRunner(
+                 "missing_prev_index": missing_prev_index,
+                 "missing_current_req": missing_current_req,
+                 "is_ngram_gpu": is_ngram_gpu,
+-                },
+-            )
++            },
++        )
++
++    def _cc_output_publication_valid_count_result(
++        self,
++        publication: CCOutputPublication,
++    ) -> list[int]:
++        if self.cc_spec_count_fast_publication_enabled:
++            return publication.valid_sampled_token_count_result()
++        result = publication.result()
++        return [len(tokens) for tokens in result.sampled_token_ids]
+ 
+     def _update_states(self, scheduler_output: "SchedulerOutput") -> Callable | None:
+         """Update the cached states and the persistent batch with the scheduler
+@@ -6036,8 +6113,8 @@ class GPUModelRunner(
+             prev_sampled_token_ids is not None
+             and self._cc_valid_sampled_token_count_publication is not None
+         ):
+-            result = self._cc_valid_sampled_token_count_publication.result()
+-            return [len(tokens) for tokens in result.sampled_token_ids]
++            publication = self._cc_valid_sampled_token_count_publication
++            return self._cc_output_publication_valid_count_result(publication)
+ 
+         sampled_count_event = self.valid_sampled_token_count_event
+         if sampled_count_event is None or prev_sampled_token_ids is None:
+-- 
+2.43.0
+
