@@ -6,9 +6,6 @@ ARG VLLM_BASE_IMAGE=vllm/vllm-openai:v0.23.0@sha256:6d8429e38e3747723ca07ee1b179
 FROM ${VLLM_BASE_IMAGE}
 
 ARG SOURCE_REVISION=unversioned
-LABEL org.opencontainers.image.source="https://github.com/tinfoilsh/confidential-gemma4-31b" \
-      org.opencontainers.image.revision="${SOURCE_REVISION}" \
-      com.tinfoil.vllm.runtime-revision="21edb0a1e64d4d452dd5e5c6dbac044e89904292"
 
 # Security-only wheel updates are fetched by immutable PyPI artifact URL and
 # verified by BuildKit before they enter the image.
@@ -123,3 +120,7 @@ if missing:
 
 print("verified vLLM", vllm.__version__, "CC/MTP handoff patches")
 PY
+
+LABEL org.opencontainers.image.source="https://github.com/tinfoilsh/confidential-gemma4-31b" \
+      org.opencontainers.image.revision="${SOURCE_REVISION}" \
+      com.tinfoil.vllm.runtime-revision="21edb0a1e64d4d452dd5e5c6dbac044e89904292"
