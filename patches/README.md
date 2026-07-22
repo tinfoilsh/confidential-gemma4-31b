@@ -3,7 +3,7 @@
 These 19 patches apply in filename order to the official vLLM v0.25.1
 Python package. They were generated from
 `tinfoilsh/vllm-cc-opt:milestone/gemma4-cc-v0251-v1-perf-b300-20260722` at
-commit `f7ccdd059`.
+commit `f7ccdd0596cb6899bc0b32a1ca581d9f67250db7`.
 
 ## Included
 

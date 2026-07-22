@@ -115,6 +115,7 @@ required = (
     "VLLM_CC_SPEC_COUNT_FAST_PUBLICATION",
     "VLLM_CC_DECODE_METADATA_FASTPATH",
     "VLLM_CC_BLOCK_TABLE_DIRTY_UPDATE",
+    "self.pin_memory = PIN_MEMORY",
     "_cc_uniform_mtp_decode_metadata_kernel",
     "_coalesce_dirty_updates",
     "sampled_token_ids_np >= 0",
@@ -128,5 +129,5 @@ PY
 
 LABEL org.opencontainers.image.source="https://github.com/tinfoilsh/confidential-gemma4-31b" \
       org.opencontainers.image.revision="${SOURCE_REVISION}" \
-      com.tinfoil.vllm.runtime-revision="613cb3f8d7e4b414f2fa341ecd0cdac30b2c4414" \
+      com.tinfoil.vllm.runtime-revision="f7ccdd0596cb6899bc0b32a1ca581d9f67250db7" \
       com.tinfoil.vllm.variant="cc-mtp-perf-v0.25.1-v1"

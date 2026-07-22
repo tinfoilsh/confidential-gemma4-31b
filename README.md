@@ -3,9 +3,10 @@
 Tinfoil confidential enclave configuration for
 [`google/gemma-4-31B-it`](https://huggingface.co/google/gemma-4-31B-it).
 
-The active milestone branch ports the validated confidential-computing and MTP
-optimization stack to vLLM v0.25.1. It is not a production release until the
-full-CC validation recorded in [HANDOFF.md](HANDOFF.md) is complete.
+This branch ports the confidential-computing and MTP optimization stack to
+vLLM v0.25.1. The candidate has completed full-CC correctness, API, stress,
+and performance validation on an NVIDIA B300; [HANDOFF.md](HANDOFF.md) records
+the immutable identities, results, and release procedure.
 
 ## Repo layout
 
@@ -15,13 +16,14 @@ confidential-gemma4-31b/
 ├── HANDOFF.md                 candidate status and required validation
 ├── patches/                   ordered deployment patch series
 │   ├── 0101-0104-...          minimal CC, correctness, and upstream MTP fixes
-│   ├── 0105-0117-...          V1 CC/MTP performance and safety fixes
+│   ├── 0105-0119-...          V1 CC/MTP performance and safety fixes
 │   └── README.md              provenance and regeneration instructions
 ├── validation/                API and source-level verification tools
 ├── tinfoil-config.yml         enclave configuration
 └── .github/workflows/
-    ├── tinfoil-build.yml      manual review/release image build
-    └── tinfoil-release.yml    attestation and release publication
+    ├── tinfoil-release.yml    review image and release build
+    └── tinfoil-release-publish.yml
+                               release measurement and publication
 ```
 
 The authoritative implementation is
