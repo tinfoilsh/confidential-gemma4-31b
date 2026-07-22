@@ -1,15 +1,36 @@
 From 09b7ec8071e26d6c40f75671defeb0f14492d4f3 Mon Sep 17 00:00:00 2001
 From: Jules Drean <jules@tinfoil.sh>
 Date: Wed, 22 Jul 2026 19:14:02 +0000
-Subject: cc: centralize pageable host staging policy
+Subject: [PATCH 2/3] cc: centralize pageable host staging policy
 
 ---
- vllm/platforms/cuda.py       | 27 +++++++++++++++++++++++++++
- vllm/platforms/interface.py  |  5 +++++
- vllm/utils/platform_utils.py | 20 ++++++++++++++++++++
- vllm/utils/torch_utils.py    |  4 ++--
- 4 files changed, 54 insertions(+), 2 deletions(-)
+ tests/utils_/test_platform_utils.py | 13 +++++++++++++
+ vllm/platforms/cuda.py              | 27 +++++++++++++++++++++++++++
+ vllm/platforms/interface.py         |  5 +++++
+ vllm/utils/platform_utils.py        | 20 ++++++++++++++++++++
+ vllm/utils/torch_utils.py           |  4 ++--
+ 5 files changed, 67 insertions(+), 2 deletions(-)
+ create mode 100644 tests/utils_/test_platform_utils.py
 
+diff --git a/tests/utils_/test_platform_utils.py b/tests/utils_/test_platform_utils.py
+new file mode 100644
+index 000000000..41b844172
+--- /dev/null
++++ b/tests/utils_/test_platform_utils.py
+@@ -0,0 +1,13 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++
++from vllm.utils.platform_utils import prefer_pinned
++
++
++def test_explicit_cc_pageable_gate_disables_pinned_memory(monkeypatch):
++    monkeypatch.setenv("VLLM_CC_PAGEABLE_H2D", "1")
++    prefer_pinned.cache_clear()
++    try:
++        assert prefer_pinned() is False
++    finally:
++        prefer_pinned.cache_clear()
 diff --git a/vllm/platforms/cuda.py b/vllm/platforms/cuda.py
 index 605650525..3c218a7fa 100644
 --- a/vllm/platforms/cuda.py
@@ -131,3 +152,6 @@ index cf821a54b..094f89525 100644
  
  
  def is_quantized_kv_cache(kv_cache_dtype: str) -> bool:
+-- 
+2.43.0
+
