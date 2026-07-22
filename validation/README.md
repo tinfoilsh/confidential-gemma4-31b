@@ -8,5 +8,9 @@ candidate.
 against stock and candidate endpoints. Run it inside the benchmark environment
 where both endpoints are available; see `--help` for arguments.
 
+`validate_endpoint.py` runs the same seven cases repeatedly against one
+endpoint. It also checks deterministic normalized output and is the preferred
+runner for one-GPU sequential stock/candidate validation.
+
 Correctness results must be preserved in `vllm-cc-gemma4-lab`, not committed
 to this deployment repository.
