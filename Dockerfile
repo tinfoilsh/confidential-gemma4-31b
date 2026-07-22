@@ -98,6 +98,7 @@ source = "\n".join(
         "utils/platform_utils.py",
         "utils/torch_utils.py",
         "v1/worker/gpu_model_runner.py",
+        "v1/spec_decode/llm_base_proposer.py",
     )
 )
 required = (
@@ -107,6 +108,7 @@ required = (
     "VLLM_DISABLE_STRUCTURED_OUTPUT_REGEX",
     "uses_grammar_constraint",
     "logitsprocs_need_output_token_ids=bool(custom_logitsprocs)",
+    "MTP drafts project target-width embeddings",
 )
 missing = [marker for marker in required if marker not in source]
 if missing:
@@ -117,5 +119,5 @@ PY
 
 LABEL org.opencontainers.image.source="https://github.com/tinfoilsh/confidential-gemma4-31b" \
       org.opencontainers.image.revision="${SOURCE_REVISION}" \
-      com.tinfoil.vllm.runtime-revision="7fee659f95cb868adf8eb47bd82f98710f98475f" \
-      com.tinfoil.vllm.variant="minimal-cc-v0.25.1"
+      com.tinfoil.vllm.runtime-revision="894b5f0f6f78c8b02663110be7998fa0dd2063f2" \
+      com.tinfoil.vllm.variant="minimal-cc-v0.25.1-v1-mtp"

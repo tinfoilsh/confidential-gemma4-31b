@@ -19,6 +19,8 @@ containers:
     restart: always
     env:
       - PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
+      # v0.25.1 V2 corrupts Gemma 4 output on B300; V1 is full-CC validated.
+      - VLLM_USE_V2_MODEL_RUNNER: "0"
       - VLLM_CC_PAGEABLE_H2D: "1"
       # Public regex constraints are disabled; JSON schema/choice remain available.
       - VLLM_DISABLE_STRUCTURED_OUTPUT_REGEX: "1"
