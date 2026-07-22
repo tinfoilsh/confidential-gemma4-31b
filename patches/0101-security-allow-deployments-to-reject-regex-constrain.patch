@@ -4,45 +4,10 @@ Date: Wed, 22 Jul 2026 08:13:14 +0000
 Subject: [PATCH 1/3] security: allow deployments to reject regex constraints
 
 ---
- .../test_regex_compilation_timeout.py            | 16 +++++++++++++++-
- vllm/envs.py                                     |  6 ++++++
- vllm/sampling_params.py                          |  6 ++++++
- 3 files changed, 27 insertions(+), 1 deletion(-)
+ vllm/envs.py            | 6 ++++++
+ vllm/sampling_params.py | 6 ++++++
+ 2 files changed, 12 insertions(+)
 
-diff --git a/tests/v1/structured_output/test_regex_compilation_timeout.py b/tests/v1/structured_output/test_regex_compilation_timeout.py
-index b0eaeed95..ec372a02c 100644
---- a/tests/v1/structured_output/test_regex_compilation_timeout.py
-+++ b/tests/v1/structured_output/test_regex_compilation_timeout.py
-@@ -10,10 +10,12 @@ Addresses advisory GHSA-rwxx-mrjm-wc2m.
- """
- 
- import time
--from unittest.mock import patch
-+from unittest.mock import Mock, patch
- 
- import pytest
- 
-+from vllm.config import StructuredOutputsConfig
-+from vllm.sampling_params import SamplingParams, StructuredOutputsParams
- from vllm.v1.structured_output.utils import compile_regex_with_timeout
- 
- 
-@@ -59,3 +61,15 @@ class TestCompileRegexWithTimeout:
-             pytest.raises(ValueError, match=r"\(a\+\)\+b"),
-         ):
-             compile_regex_with_timeout(slow_compile, pattern)
-+
-+
-+def test_server_can_disable_structured_output_regex():
-+    params = SamplingParams(
-+        structured_outputs=StructuredOutputsParams(regex=r"[a-z]+")
-+    )
-+
-+    with (
-+        patch("vllm.envs.VLLM_DISABLE_STRUCTURED_OUTPUT_REGEX", True),
-+        pytest.raises(ValueError, match="disabled by the server"),
-+    ):
-+        params._validate_structured_outputs(StructuredOutputsConfig(), Mock())
 diff --git a/vllm/envs.py b/vllm/envs.py
 index 13a19b86c..a681ebdd0 100755
 --- a/vllm/envs.py

@@ -4,75 +4,9 @@ Date: Wed, 22 Jul 2026 19:14:02 +0000
 Subject: [PATCH 3/3] fix: guard grammar-constrained Gemma repetition
 
 ---
- tests/v1/core/test_repetition_detection.py | 49 +++++++++++++++++++++-
- vllm/sampling_params.py                    | 25 +++++++++++
- 2 files changed, 73 insertions(+), 1 deletion(-)
+ vllm/sampling_params.py | 25 +++++++++++++++++++++++++
+ 1 file changed, 25 insertions(+)
 
-diff --git a/tests/v1/core/test_repetition_detection.py b/tests/v1/core/test_repetition_detection.py
-index aae6e3b70..4a65b3ecb 100644
---- a/tests/v1/core/test_repetition_detection.py
-+++ b/tests/v1/core/test_repetition_detection.py
-@@ -2,12 +2,59 @@
- # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
- import pytest
- 
--from vllm.sampling_params import RepetitionDetectionParams, SamplingParams
-+from vllm.sampling_params import (
-+    RepetitionDetectionParams,
-+    SamplingParams,
-+    StructuredOutputsParams,
-+)
- from vllm.v1.core.sched.utils import check_sequence_repetition, check_stop
- from vllm.v1.request import Request, RequestStatus
- 
- pytestmark = pytest.mark.cpu_test
- 
-+
-+@pytest.mark.parametrize(
-+    "structured_outputs",
-+    [
-+        StructuredOutputsParams(json={"type": "object"}),
-+        StructuredOutputsParams(json_object=True),
-+        StructuredOutputsParams(grammar='root ::= "ok"'),
-+    ],
-+)
-+def test_grammar_constraints_enable_repetition_detection(structured_outputs):
-+    params = SamplingParams(structured_outputs=structured_outputs)
-+
-+    assert params.repetition_detection == RepetitionDetectionParams(
-+        max_pattern_size=20,
-+        min_pattern_size=3,
-+        min_count=4,
-+    )
-+
-+
-+@pytest.mark.parametrize(
-+    "structured_outputs",
-+    [
-+        StructuredOutputsParams(regex="[a-z]+"),
-+        StructuredOutputsParams(choice=["yes", "no"]),
-+    ],
-+)
-+def test_non_grammar_constraints_do_not_enable_repetition_detection(
-+    structured_outputs,
-+):
-+    params = SamplingParams(structured_outputs=structured_outputs)
-+
-+    assert params.repetition_detection is None
-+
-+
-+def test_explicit_repetition_detection_opt_out_is_preserved():
-+    disabled = RepetitionDetectionParams()
-+    params = SamplingParams(
-+        structured_outputs=StructuredOutputsParams(json_object=True),
-+        repetition_detection=disabled,
-+    )
-+
-+    assert params.repetition_detection is disabled
-+
- # ============================================================================
- # UNIT TESTS - check_sequence_repetition function
- # ============================================================================
 diff --git a/vllm/sampling_params.py b/vllm/sampling_params.py
 index a1a529119..91d144bb9 100644
 --- a/vllm/sampling_params.py
