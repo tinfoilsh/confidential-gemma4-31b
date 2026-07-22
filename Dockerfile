@@ -83,23 +83,21 @@ assert importlib.util.find_spec("mooncake") is None
 PY
 
 RUN python3 - <<'PY'
-import inspect
+from pathlib import Path
 
-from vllm import envs, sampling_params
-from vllm.platforms import cuda, interface
-from vllm.utils import platform_utils, torch_utils
-from vllm.v1.worker import gpu_model_runner
+import vllm
 
+root = Path(vllm.__file__).resolve().parent
 source = "\n".join(
-    inspect.getsource(module)
-    for module in (
-        envs,
-        sampling_params,
-        cuda,
-        interface,
-        platform_utils,
-        torch_utils,
-        gpu_model_runner,
+    (root / relative).read_text()
+    for relative in (
+        "envs.py",
+        "sampling_params.py",
+        "platforms/cuda.py",
+        "platforms/interface.py",
+        "utils/platform_utils.py",
+        "utils/torch_utils.py",
+        "v1/worker/gpu_model_runner.py",
     )
 )
 required = (
