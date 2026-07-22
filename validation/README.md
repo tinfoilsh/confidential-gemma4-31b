@@ -12,5 +12,9 @@ where both endpoints are available; see `--help` for arguments.
 endpoint. It also checks deterministic normalized output and is the preferred
 runner for one-GPU sequential stock/candidate validation.
 
+`test_block_table_coalescing.py` runs a randomized property test against the
+installed candidate runtime. It verifies that coalesced destinations are
+disjoint and reproduce the final authoritative CPU block table.
+
 Correctness results must be preserved in `vllm-cc-gemma4-lab`, not committed
 to this deployment repository.
