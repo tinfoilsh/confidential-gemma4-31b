@@ -34,6 +34,7 @@ required = (
     "VLLM_CC_DECODE_METADATA_FASTPATH",
     "_cc_uniform_mtp_decode_metadata_kernel",
     "_cc_mtp_decode_gpu_synced",
+    "_coalesce_dirty_updates",
 )
 missing = [marker for marker in required if marker not in source]
 if missing:

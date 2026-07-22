@@ -14,7 +14,7 @@ trap 'rm -rf "$temporary_root"' EXIT
 git clone --shared "$source_checkout" "$temporary_root/patched"
 git clone --shared "$source_checkout" "$temporary_root/expected"
 git -C "$temporary_root/patched" checkout --detach v0.23.0
-git -C "$temporary_root/expected" checkout --detach 52b60ccc7c48b5a36791036fbacd1bcc1911ca8f
+git -C "$temporary_root/expected" checkout --detach f49f4a1c5
 
 for patch_file in "$repo_root"/patches/*.patch; do
   patch -d "$temporary_root/patched" -p1 --no-backup-if-mismatch --fuzz=0 \

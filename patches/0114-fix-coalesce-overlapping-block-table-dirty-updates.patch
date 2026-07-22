@@ -1,0 +1,135 @@
+From f49f4a1c5e3ca84378041f38f4a15090dce55b2c Mon Sep 17 00:00:00 2001
+From: Jules Drean <jules@tinfoil.sh>
+Date: Wed, 22 Jul 2026 04:12:27 +0000
+Subject: fix: coalesce overlapping block-table dirty updates
+
+---
+ vllm/v1/worker/block_table.py | 72 +++++++++++++++++++++++++++++++----
+ 1 file changed, 64 insertions(+), 8 deletions(-)
+
+diff --git a/vllm/v1/worker/block_table.py b/vllm/v1/worker/block_table.py
+index 948a697d9..f678dfcc6 100644
+--- a/vllm/v1/worker/block_table.py
++++ b/vllm/v1/worker/block_table.py
+@@ -224,10 +224,13 @@ class BlockTable:
+         if not self._block_table_dirty:
+             return
+ 
+-        if self._block_table_dirty_update_enabled and self._dirty_values:
+-            if self._try_commit_dirty_updates(num_reqs):
+-                self._block_table_dirty = False
+-                return
++        if (
++            self._block_table_dirty_update_enabled
++            and self._dirty_values
++            and self._try_commit_dirty_updates(num_reqs)
++        ):
++            self._block_table_dirty = False
++            return
+ 
+         self.block_table.copy_to_gpu(num_reqs)
+         self._clear_dirty_updates()
+@@ -286,9 +289,59 @@ class BlockTable:
+             device=self.device,
+         )
+ 
++    def _coalesce_dirty_updates(
++        self,
++    ) -> tuple[list[int], list[int], list[int], list[int]]:
++        """Return disjoint dirty ranges populated from the final CPU table.
++
++        A row can be cleared, moved, and reused before the next commit. Launching
++        those staged writes as separate Triton programs gives overlapping stores
++        no ordering guarantee. Merge overlapping or adjacent ranges so each GPU
++        destination is written once with the authoritative final CPU value.
++        """
++        ranges_by_row: dict[int, list[tuple[int, int]]] = {}
++        previous_cu_len = 0
++        for row, start, cu_len in zip(
++            self._dirty_rows,
++            self._dirty_starts,
++            self._dirty_cu_lens,
++        ):
++            update_len = cu_len - previous_cu_len
++            previous_cu_len = cu_len
++            if update_len <= 0:
++                continue
++            ranges_by_row.setdefault(row, []).append((start, start + update_len))
++
++        rows: list[int] = []
++        starts: list[int] = []
++        values: list[int] = []
++        cu_lens: list[int] = []
++        block_table_np = self.block_table.np
++
++        for row in sorted(ranges_by_row):
++            ranges = sorted(ranges_by_row[row])
++            merged: list[tuple[int, int]] = []
++            for start, end in ranges:
++                if merged and start <= merged[-1][1]:
++                    merged[-1] = (merged[-1][0], max(merged[-1][1], end))
++                else:
++                    merged.append((start, end))
++
++            for start, end in merged:
++                rows.append(row)
++                starts.append(start)
++                values.extend(int(v) for v in block_table_np[row, start:end])
++                cu_lens.append(len(values))
++
++        return rows, starts, values, cu_lens
++
+     def _try_commit_dirty_updates(self, num_reqs: int) -> bool:
+-        n_updates = len(self._dirty_rows)
+-        n_values = len(self._dirty_values)
++        staged_updates = len(self._dirty_rows)
++        dirty_rows, dirty_starts, dirty_values, dirty_cu_lens = (
++            self._coalesce_dirty_updates()
++        )
++        n_updates = len(dirty_rows)
++        n_values = len(dirty_values)
+         if n_updates == 0 or n_values == 0:
+             self._clear_dirty_updates()
+             return True
+@@ -316,14 +369,14 @@ class BlockTable:
+         packed_gpu = self._dirty_packed_gpu[:packed_len]
+ 
+         for i, (row, start, cu_len) in enumerate(
+-            zip(self._dirty_rows, self._dirty_starts, self._dirty_cu_lens)
++            zip(dirty_rows, dirty_starts, dirty_cu_lens)
+         ):
+             offset = 3 * i
+             packed_cpu[offset] = row
+             packed_cpu[offset + 1] = start
+             packed_cpu[offset + 2] = cu_len
+         packed_cpu[packed_meta_len:packed_len] = torch.tensor(
+-            self._dirty_values,
++            dirty_values,
+             dtype=torch.int32,
+             device="cpu",
+         )
+@@ -337,6 +390,7 @@ class BlockTable:
+                 "bytes": packed_len * 4,
+                 "dtype": "torch.int32",
+                 "pin_memory": self.pin_memory,
++                "staged_updates": staged_updates,
+                 "num_updates": n_updates,
+                 "num_values": n_values,
+                 "full_copy_bytes_avoided": max(0, (full_copy_elems - packed_len) * 4),
+@@ -348,6 +402,7 @@ class BlockTable:
+             "ccbench.block_table.dirty_update.apply",
+             {
+                 "num_updates": n_updates,
++                "staged_updates": staged_updates,
+                 "num_values": n_values,
+                 "packed_bytes": packed_len * 4,
+                 "full_copy_bytes_avoided": max(0, (full_copy_elems - packed_len) * 4),
+@@ -365,6 +420,7 @@ class BlockTable:
+             "ccbench.block_table.dirty_update.summary",
+             {
+                 "num_updates": n_updates,
++                "staged_updates": staged_updates,
+                 "num_values": n_values,
+                 "packed_bytes": packed_len * 4,
+                 "full_copy_bytes_avoided": max(0, (full_copy_elems - packed_len) * 4),
+
