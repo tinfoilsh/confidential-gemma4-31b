@@ -254,14 +254,21 @@ def main() -> int:
         "/v1/chat/completions",
         payload=chat_payload(
             [
-                {"type": "text", "text": "Reply with one word about this image."},
+                {
+                    "type": "text",
+                    "text": (
+                        "What is the dominant color in this image? "
+                        "Reply with one uppercase color word."
+                    ),
+                },
                 {"type": "image_url", "image_url": {"url": png_data_url()}},
             ]
         ),
         token=args.token,
         timeout=args.timeout,
     )
-    image["passed"] = image.get("status") == 200
+    image_text = response_text(image)
+    image["passed"] = image.get("status") == 200 and "red" in image_text.lower()
     results["checks"]["inline_image_supported"] = image
     if not image["passed"]:
         failures.append("inline_image_supported")

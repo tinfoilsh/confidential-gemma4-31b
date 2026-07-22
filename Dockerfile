@@ -92,6 +92,7 @@ from vllm import sampling_params
 from vllm.v1.sample import rejection_sampler
 from vllm.v1.structured_output import utils as structured_output_utils
 from vllm.v1.worker import block_table, gpu_model_runner
+from vllm.tool_parsers import gemma4_tool_parser
 
 source = "\n".join(
     inspect.getsource(module)
@@ -101,6 +102,7 @@ source = "\n".join(
         rejection_sampler,
         structured_output_utils,
         sampling_params,
+        gemma4_tool_parser,
     )
 )
 required = (
@@ -113,6 +115,7 @@ required = (
     "score = tl.where(vocab_mask, score, float(\"-inf\"))",
     "compile_regex_with_timeout",
     "VLLM_DISABLE_STRUCTURED_OUTPUT_REGEX",
+    "_combine_tool_call_deltas",
 )
 missing = [marker for marker in required if marker not in source]
 if missing:
@@ -123,4 +126,4 @@ PY
 
 LABEL org.opencontainers.image.source="https://github.com/tinfoilsh/confidential-gemma4-31b" \
       org.opencontainers.image.revision="${SOURCE_REVISION}" \
-      com.tinfoil.vllm.runtime-revision="21edb0a1e64d4d452dd5e5c6dbac044e89904292"
+      com.tinfoil.vllm.runtime-revision="d703207b40ed80de61edc8d2dd569d7dec48c033"

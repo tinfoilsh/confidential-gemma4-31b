@@ -10,7 +10,7 @@ backports and dependency hardening described below.
 | Item | Value |
 |---|---|
 | vLLM base | `v0.23.0` / `0fc695fc6d1d82e9a5ac6835ac8e4e1c83703665` |
-| Hardened candidate | `21edb0a1e` |
+| Hardened candidate | `d703207b4` |
 | Preserved handoff | `52b60ccc7c48b5a36791036fbacd1bcc1911ca8f` |
 | Source branch | `tinfoilsh/vllm-cc-opt:prod/gemma4-cc-v0230-b300-20260722` |
 | Evidence | private `tinfoilsh/vllm-cc-gemma4-lab` repository |
@@ -67,6 +67,7 @@ Security hardening after the original performance validation includes:
 - removal of the unused Mooncake connector; and
 - explicit video disablement plus OpenCV removal until its wheel carries
   FFmpeg 8.1.2 or newer. Image input remains enabled.
+- correct final-argument streaming when Gemma 4 emits parallel tool calls.
 
 Use `validation/validate_stock_candidate_cc.py` for API comparison. The lab
 repository contains the original harness, result JSON, patch manifest, and the
@@ -75,9 +76,11 @@ remaining investigation plan.
 ## Verification Completed
 
 - The prior 15-patch image applied to vLLM v0.23.0 with zero fuzz.
-- The hardened 20-patch series applies with zero fuzz and matches candidate
-  `21edb0a1e` plus the intentional structured-output patch; runtime and full-CC
+- The hardened 21-patch series applies with zero fuzz and matches candidate
+  `d703207b4` plus the intentional structured-output patch; runtime and full-CC
   verification are pending.
+- The full Gemma 4 tool-parser unit suite passes 52/52, including the parallel
+  streaming regression.
 - Shell and Python validation tools pass syntax checks.
 - `docker buildx build --check` resolves the pinned base and reports no
   Dockerfile warnings.

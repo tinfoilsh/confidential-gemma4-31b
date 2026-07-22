@@ -14,7 +14,7 @@ trap 'rm -rf "$temporary_root"' EXIT
 git clone --shared "$source_checkout" "$temporary_root/patched"
 git clone --shared "$source_checkout" "$temporary_root/expected"
 git -C "$temporary_root/patched" checkout --detach v0.23.0
-git -C "$temporary_root/expected" checkout --detach 21edb0a1e
+git -C "$temporary_root/expected" checkout --detach d703207b4
 
 patch -d "$temporary_root/expected" -p1 --no-backup-if-mismatch --fuzz=0 \
   < "$repo_root/patches/0001-auto-enable-repetition-detection-structured-output.patch"

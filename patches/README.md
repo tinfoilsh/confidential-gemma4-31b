@@ -20,8 +20,10 @@ directory with `patch -p1 --fuzz=0`.
   `GHSA-33cg-gxv8-3p8g` from vLLM 0.24.0.
 - `0119` lets public deployments reject user-provided regex constraints
   entirely, in addition to the upstream compilation timeout.
+- `0120` preserves the completed call's final argument delta when Gemma 4 emits
+  a tool-call end marker and the next start marker in one streaming chunk.
 
-The hardened takeover candidate is commit `21edb0a1e`, based on preserved
+The hardened takeover candidate is commit `d703207b4`, based on preserved
 handoff commit `52b60ccc7c48b5a36791036fbacd1bcc1911ca8f` and vLLM v0.23.0 commit
 `0fc695fc6d1d82e9a5ac6835ac8e4e1c83703665`.
 
@@ -36,9 +38,9 @@ private `tinfoilsh/vllm-cc-gemma4-lab` repository.
 
 The security additions require a new image and full-CC regression run. The
 functional results below apply to `f49f4a1c5`; they are the comparison baseline,
-not a security sign-off for `21edb0a1e`.
+not a security sign-off for `d703207b4`.
 
-## Regenerating 0101-0119
+## Regenerating 0101-0120
 
 From the preserved vLLM checkout:
 
@@ -48,7 +50,7 @@ git format-patch \
   --keep-subject \
   --start-number=101 \
   --output-directory /path/to/confidential-gemma4-31b/patches \
-  v0.23.0..21edb0a1e -- vllm
+  v0.23.0..d703207b4 -- vllm
 ```
 
 The `-- vllm` path restriction intentionally excludes upstream tests from the

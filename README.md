@@ -16,7 +16,7 @@ confidential-gemma4-31b/
 ├── HANDOFF.md                 candidate status and required validation
 ├── patches/                   ordered deployment patch series
 │   ├── 0001-...               Gemma structured-output workaround
-│   ├── 0101-0119-...          vLLM CC/MTP and security backports
+│   ├── 0101-0120-...          vLLM CC/MTP, security, and API fixes
 │   └── README.md              provenance and regeneration instructions
 ├── validation/                API and source-level verification tools
 ├── tinfoil-config.yml         enclave configuration
