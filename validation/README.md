@@ -2,7 +2,7 @@
 
 `verify_patch_series.sh` applies the deployment patches to exact vLLM v0.25.1
 and compares the runtime package to source commit
-`f7ccdd0596cb6899bc0b32a1ca581d9f67250db7`.
+`2c8af33d916a7e26255b130b513bdc7cc99ffe92`.
 
 `validate_stock_candidate_cc.py` runs the deterministic seven-case API suite
 against stock and candidate endpoints. Run it inside the benchmark environment
@@ -19,6 +19,11 @@ equality with the oracle while request slots are reused.
 `test_block_table_coalescing.py` runs a randomized property test against the
 installed candidate runtime. It verifies that coalesced destinations are
 disjoint and reproduce the final authoritative CPU block table.
+
+`test_gemma4_tool_args.py` streams tool calls through the installed Gemma4
+parser and checks the assembled arguments against expected objects, that a
+deeply nested call parses instead of raising RecursionError, and that a
+structural-char-dense call streams a bounded number of argument chunks. It needs no endpoint.
 
 `validate_security_endpoint.py` exercises the public-input trust boundary. It
 expects regex constraints, remote and local-file media, video, and negative

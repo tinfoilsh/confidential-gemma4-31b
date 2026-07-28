@@ -9,7 +9,7 @@ workflow so it builds, pins, measures, attests, and publishes the final image.
 | Item | Immutable value |
 |---|---|
 | vLLM base | `v0.25.1` / `752a3a504485790a2e8491cacbb35c137339ad34` |
-| vLLM candidate | `tinfoilsh/vllm-cc-opt@f7ccdd0596cb6899bc0b32a1ca581d9f67250db7` |
+| vLLM candidate | `tinfoilsh/vllm-cc-opt@2c8af33d916a7e26255b130b513bdc7cc99ffe92` |
 | vLLM branch | `milestone/gemma4-cc-v0251-v1-perf-b300-20260722` |
 | Deployment candidate | `b4426497a6c06df09bf96b1f87a886c574764abe` |
 | Review image | `sha256:fc473096b8527c19bf44e7d164772a70e61c225d0a6d936a7d8f5be204f08372` |
@@ -100,7 +100,7 @@ fix, and removes obsolete v0.23.0 patches:
 - benchmark-only MTP observability from the production runtime.
 
 `validation/verify_patch_series.sh` applies every patch to exact v0.25.1 with
-zero fuzz and diffs the result against `f7ccdd0596cb6899bc0b32a1ca581d9f67250db7`.
+zero fuzz and diffs the result against `2c8af33d916a7e26255b130b513bdc7cc99ffe92`.
 
 ## Release Procedure
 

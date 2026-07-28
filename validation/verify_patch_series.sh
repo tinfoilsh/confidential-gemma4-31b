@@ -15,7 +15,7 @@ git clone --shared "$source_checkout" "$temporary_root/patched"
 git clone --shared "$source_checkout" "$temporary_root/expected"
 git -C "$temporary_root/patched" checkout --detach v0.25.1
 git -C "$temporary_root/expected" checkout --detach \
-  f7ccdd0596cb6899bc0b32a1ca581d9f67250db7
+  2c8af33d916a7e26255b130b513bdc7cc99ffe92
 
 for patch_file in "$repo_root"/patches/*.patch; do
   patch -d "$temporary_root/patched" -p1 --no-backup-if-mismatch --fuzz=0 \
