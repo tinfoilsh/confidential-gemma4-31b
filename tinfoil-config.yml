@@ -49,10 +49,12 @@ shim:
   authenticated-endpoints:
     - /v1/chat/completions
     - /v1/responses
+    - /tokenize
     - /metrics
   paths:
     - /v1/chat/completions
     - /v1/models
     - /v1/responses
+    - /tokenize
     - /metrics
     - /health
