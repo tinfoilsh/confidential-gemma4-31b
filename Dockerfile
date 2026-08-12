@@ -36,8 +36,8 @@ RUN set -eux; \
         gpgconf=2.2.27-3ubuntu2.5 \
         gpgsm=2.2.27-3ubuntu2.5 \
         gpgv=2.2.27-3ubuntu2.5 \
-        libssl3=3.0.2-0ubuntu1.25 \
-        openssl=3.0.2-0ubuntu1.25; \
+        libssl3=3.0.2-0ubuntu1.26 \
+        openssl=3.0.2-0ubuntu1.26; \
     rm -rf /var/lib/apt/lists/*
 
 COPY patches/ /tmp/tinfoil-patches/
