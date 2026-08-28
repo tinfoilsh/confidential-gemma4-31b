@@ -1,14 +1,14 @@
-From 11d46b60207a097d64757dd1fda4e4ff3c7e456a Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Jules Drean <jules@tinfoil.sh>
 Date: Tue, 23 Jun 2026 16:56:15 -0400
-Subject: [PATCH 107/117] cc: add k1 output publication worker
+Subject: [PATCH] cc: add k1 output publication worker
 
 ---
- vllm/v1/worker/gpu_model_runner.py | 290 +++++++++++++++++++++++++++--
- 1 file changed, 271 insertions(+), 19 deletions(-)
+ vllm/v1/worker/gpu_model_runner.py | 292 +++++++++++++++++++++++++++--
+ 1 file changed, 272 insertions(+), 20 deletions(-)
 
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index feaca12eb..1211eec58 100644
+index ed1635f7fd..74d2ff6056 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
 @@ -5,6 +5,7 @@ import functools
@@ -19,7 +19,7 @@ index feaca12eb..1211eec58 100644
  import threading
  import time
  from collections import defaultdict
-@@ -338,6 +339,208 @@ class AsyncGPUModelRunnerOutput(AsyncModelRunnerOutput):
+@@ -398,6 +399,208 @@ class AsyncGPUModelRunnerOutput(AsyncModelRunnerOutput):
          return output
  
  
@@ -228,7 +228,7 @@ index feaca12eb..1211eec58 100644
  def _copy_pooler_output_to_cpu(
      raw_pooler_output: PoolerOutput, finished_mask: list[bool]
  ) -> list[torch.Tensor | None]:
-@@ -735,6 +938,12 @@ class GPUModelRunner(
+@@ -801,6 +1004,12 @@ class GPUModelRunner(
          self._cc_decode_metadata_arange_i64_gpu: torch.Tensor | None = None
          self._cc_decode_metadata_fast_ready_req_ids: tuple[str, ...] | None = None
          self._cc_decode_metadata_has_logged_engaged = False
@@ -241,9 +241,9 @@ index feaca12eb..1211eec58 100644
  
          # self.cudagraph_batch_sizes sorts in ascending order.
          if (
-@@ -1161,6 +1370,31 @@ class GPUModelRunner(
-             self.async_output_copy_stream = stream
-         return stream
+@@ -1249,6 +1458,31 @@ class GPUModelRunner(
+         for mm_hash in scheduler_output.free_encoder_mm_hashes:
+             self.encoder_cache.pop(mm_hash, None)
  
 +    def _get_or_create_cc_output_publication_worker(
 +        self,
@@ -273,9 +273,9 @@ index feaca12eb..1211eec58 100644
      def _update_states(self, scheduler_output: "SchedulerOutput") -> Callable | None:
          """Update the cached states and the persistent batch with the scheduler
          output.
-@@ -4878,25 +5112,40 @@ class GPUModelRunner(
-                     ].clone(),
-                 )
+@@ -5082,26 +5316,41 @@ class GPUModelRunner(
+                 scheduler_output.total_num_scheduled_tokens
+             )
  
 -            async_output = AsyncGPUModelRunnerOutput(
 -                model_runner_output=output,
@@ -286,6 +286,7 @@ index feaca12eb..1211eec58 100644
 -                vocab_size=self.input_batch.vocab_size,
 -                routed_experts=routed_experts_snapshot,
 -                check_ep_fault=self.check_ep_fault,
+-                num_nans=num_nans_device,
 -            )
 -        with record_function_or_nullcontext(
 -            "gpu_model_runner: set_async_sampled_token_ids"
@@ -296,7 +297,7 @@ index feaca12eb..1211eec58 100644
 -                async_output.sampled_token_ids_cpu,
 -                async_output.async_copy_ready_event,
 -            )
-+            if self._can_use_cc_output_worker():
++            if num_nans_device is None and self._can_use_cc_output_worker():
 +                worker = self._get_or_create_cc_output_publication_worker()
 +                async_output = AsyncGPUWorkerModelRunnerOutput(
 +                    model_runner_output=output,
@@ -320,6 +321,7 @@ index feaca12eb..1211eec58 100644
 +                    vocab_size=self.input_batch.vocab_size,
 +                    routed_experts=routed_experts_snapshot,
 +                    check_ep_fault=self.check_ep_fault,
++                    num_nans=num_nans_device,
 +                )
 +                with record_function_or_nullcontext(
 +                    "gpu_model_runner: set_async_sampled_token_ids"
@@ -333,7 +335,7 @@ index feaca12eb..1211eec58 100644
  
          return async_output
  
-@@ -6566,6 +6815,9 @@ class GPUModelRunner(
+@@ -6847,6 +7096,9 @@ class GPUModelRunner(
  
          # Calls torch.accelerator.synchronize()
          self._cleanup_profiling_kv_cache()
@@ -343,6 +345,3 @@ index feaca12eb..1211eec58 100644
          if current_platform.is_rocm():
              # Drop captured graphs before distributed teardown. On ROCm, delayed
              # graph destruction can surface HSA faults in the next engine startup.
--- 
-2.43.0
-

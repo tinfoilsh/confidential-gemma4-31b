@@ -1,8 +1,8 @@
-From 8a3884235b3014c885343997b543af6d15b00d26 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Jules Drean <jules@tinfoil.sh>
 Date: Sun, 28 Jun 2026 01:57:03 +0000
-Subject: [PATCH 115/117] fix: sync stale GPU num_computed_tokens before MTP
- decode metadata kernel
+Subject: [PATCH] fix: sync stale GPU num_computed_tokens before MTP decode
+ metadata kernel
 
 Use seq_lens (GPU tensor) instead of CPU num_computed_tokens_cpu_tensor
 to avoid CPU->GPU transfer that causes non-determinism with temperature=0.0.
@@ -33,10 +33,10 @@ Co-authored-by: factory-droid[bot] <138933559+factory-droid[bot]@users.noreply.g
  1 file changed, 32 insertions(+), 29 deletions(-)
 
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index 647683221..76b24459f 100644
+index fdcfbf5627..127cb26596 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
-@@ -1117,6 +1117,7 @@ class GPUModelRunner(
+@@ -1183,6 +1183,7 @@ class GPUModelRunner(
          self._cc_decode_metadata_fast_ready_req_ids: tuple[str, ...] | None = None
          self._cc_decode_metadata_has_logged_engaged = False
          self._cc_mtp_decode_metadata_has_logged_engaged = False
@@ -44,7 +44,7 @@ index 647683221..76b24459f 100644
          self._cc_mtp_cu_num_draft_tokens_gpu: torch.Tensor | None = None
          self._cc_mtp_cu_num_sampled_tokens_gpu: torch.Tensor | None = None
          self._cc_mtp_logits_indices_gpu: torch.Tensor | None = None
-@@ -2563,37 +2564,34 @@ class GPUModelRunner(
+@@ -2657,37 +2658,34 @@ class GPUModelRunner(
          assert self.valid_sampled_token_count_gpu is not None
          k_sampled = k_draft + 1
  
@@ -108,7 +108,7 @@ index 647683221..76b24459f 100644
  
          if not self._cc_mtp_decode_metadata_has_logged_engaged:
              logger.info(
-@@ -2983,6 +2981,11 @@ class GPUModelRunner(
+@@ -3083,6 +3081,11 @@ class GPUModelRunner(
              cc_decode_metadata_fastpath or cc_mtp_decode_metadata_fastpath
          )
  
@@ -120,6 +120,3 @@ index 647683221..76b24459f 100644
          if not cc_decode_metadata_fastpath:
              # Get positions.
              positions_np = (
--- 
-2.43.0
-

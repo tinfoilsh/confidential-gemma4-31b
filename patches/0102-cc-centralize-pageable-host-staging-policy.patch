@@ -1,7 +1,7 @@
-From 09b7ec8071e26d6c40f75671defeb0f14492d4f3 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Jules Drean <jules@tinfoil.sh>
 Date: Wed, 22 Jul 2026 19:14:02 +0000
-Subject: [PATCH 2/3] cc: centralize pageable host staging policy
+Subject: [PATCH] cc: centralize pageable host staging policy
 
 ---
  vllm/platforms/cuda.py       | 27 +++++++++++++++++++++++++++
@@ -11,10 +11,10 @@ Subject: [PATCH 2/3] cc: centralize pageable host staging policy
  4 files changed, 54 insertions(+), 2 deletions(-)
 
 diff --git a/vllm/platforms/cuda.py b/vllm/platforms/cuda.py
-index 605650525..3c218a7fa 100644
+index bfe08a5772..b441f4886c 100644
 --- a/vllm/platforms/cuda.py
 +++ b/vllm/platforms/cuda.py
-@@ -186,6 +186,29 @@ def with_nvml_context(fn: Callable[_P, _R]) -> Callable[_P, _R]:
+@@ -190,6 +190,29 @@ def with_nvml_context(fn: Callable[_P, _R]) -> Callable[_P, _R]:
      return wrapper
  
  
@@ -44,7 +44,7 @@ index 605650525..3c218a7fa 100644
  @cache
  def _get_wsl_kernel_version() -> tuple[int, ...] | None:
      """Return the WSL2 kernel version as a tuple, or None on parse failure.
-@@ -252,6 +275,10 @@ class CudaPlatformBase(Platform):
+@@ -260,6 +283,10 @@ class CudaPlatformBase(Platform):
      def manual_seed_all(cls, seed: int) -> None:
          torch.cuda.manual_seed_all(seed)
  
@@ -56,10 +56,10 @@ index 605650525..3c218a7fa 100644
      def get_device_capability(cls, device_id: int = 0) -> DeviceCapability | None:
          raise NotImplementedError
 diff --git a/vllm/platforms/interface.py b/vllm/platforms/interface.py
-index a81c34d7a..63a09076a 100644
+index 5c041f1632..c62db74fbf 100644
 --- a/vllm/platforms/interface.py
 +++ b/vllm/platforms/interface.py
-@@ -983,6 +983,11 @@ class Platform:
+@@ -1005,6 +1005,11 @@ class Platform:
              return False
          return True
  
@@ -72,7 +72,7 @@ index a81c34d7a..63a09076a 100644
      def get_current_memory_usage(
          cls, device: torch.types.Device | None = None
 diff --git a/vllm/utils/platform_utils.py b/vllm/utils/platform_utils.py
-index cc69d9a24..49620e834 100644
+index 5d7fed3c99..b72326c44b 100644
 --- a/vllm/utils/platform_utils.py
 +++ b/vllm/utils/platform_utils.py
 @@ -2,6 +2,7 @@
@@ -83,7 +83,7 @@ index cc69d9a24..49620e834 100644
  from collections.abc import Sequence
  from concurrent.futures.process import ProcessPoolExecutor
  from functools import cache
-@@ -46,6 +47,25 @@ def is_pin_memory_available() -> bool:
+@@ -47,6 +48,25 @@ def is_pin_memory_available() -> bool:
      return current_platform.is_pin_memory_available()
  
  
@@ -110,10 +110,10 @@ index cc69d9a24..49620e834 100644
  def is_uva_available() -> bool:
      """Check if Unified Virtual Addressing (UVA) is available."""
 diff --git a/vllm/utils/torch_utils.py b/vllm/utils/torch_utils.py
-index cf821a54b..094f89525 100644
+index 0e133a3773..c2b7fe7e92 100644
 --- a/vllm/utils/torch_utils.py
 +++ b/vllm/utils/torch_utils.py
-@@ -17,7 +17,7 @@ from torch.library import Library, infer_schema
+@@ -18,7 +18,7 @@ from torch.library import Library, infer_schema
  
  import vllm.envs as envs
  from vllm.logger import init_logger
@@ -122,7 +122,7 @@ index cf821a54b..094f89525 100644
  
  if TYPE_CHECKING:
      from vllm.config import ModelConfig
-@@ -69,7 +69,7 @@ MODELOPT_TO_VLLM_KV_CACHE_DTYPE_MAP = {
+@@ -71,7 +71,7 @@ MODELOPT_TO_VLLM_KV_CACHE_DTYPE_MAP = {
  T = TypeVar("T")
  
  
@@ -131,6 +131,3 @@ index cf821a54b..094f89525 100644
  
  
  def is_quantized_kv_cache(kv_cache_dtype: str) -> bool:
--- 
-2.43.0
-

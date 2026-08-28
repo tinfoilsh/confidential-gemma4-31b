@@ -1,17 +1,17 @@
-From a28d936645549164542a9b54ee8e1abfa29b9d1b Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Jules Drean <jules@tinfoil.sh>
 Date: Wed, 24 Jun 2026 04:20:04 -0400
-Subject: [PATCH 110/117] cc: derive mtp accepted counts from output worker
+Subject: [PATCH] cc: derive mtp accepted counts from output worker
 
 ---
  vllm/v1/worker/gpu_model_runner.py | 33 +++++++++++++++++++++++-------
  1 file changed, 26 insertions(+), 7 deletions(-)
 
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index 584e10050..6a9ebf0e7 100644
+index f0352ba9e0..a12776bb14 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
-@@ -965,6 +965,9 @@ class GPUModelRunner(
+@@ -1031,6 +1031,9 @@ class GPUModelRunner(
          if self.cc_output_worker_enabled:
              logger.info("Using experimental CC output publication worker.")
          self._cc_output_publication_worker: CCOutputPublicationWorker | None = None
@@ -21,7 +21,7 @@ index 584e10050..6a9ebf0e7 100644
  
          # self.cudagraph_batch_sizes sorts in ascending order.
          if (
-@@ -4921,6 +4924,7 @@ class GPUModelRunner(
+@@ -5132,6 +5135,7 @@ class GPUModelRunner(
          self._draft_probs = None
          self._draft_prob_req_ids = None
          self._draft_token_req_ids = None
@@ -29,9 +29,9 @@ index 584e10050..6a9ebf0e7 100644
          self.valid_sampled_token_count_gpu = None
          self.input_batch.prev_sampled_token_ids = None
  
-@@ -5135,15 +5139,18 @@ class GPUModelRunner(
+@@ -5339,15 +5343,18 @@ class GPUModelRunner(
  
-             if self._can_use_cc_output_worker():
+             if num_nans_device is None and self._can_use_cc_output_worker():
                  worker = self._get_or_create_cc_output_publication_worker()
 +                publication = worker.submit(
 +                    sampled_token_ids=sampler_output.sampled_token_ids,
@@ -55,7 +55,7 @@ index 584e10050..6a9ebf0e7 100644
                  )
                  self.input_batch.sampled_token_ids_cpu = None
                  self.input_batch.async_copy_ready_event = None
-@@ -5278,6 +5285,11 @@ class GPUModelRunner(
+@@ -5485,6 +5492,11 @@ class GPUModelRunner(
      def _copy_valid_sampled_token_count(
          self, next_token_ids: torch.Tensor, valid_sampled_tokens_count: torch.Tensor
      ) -> None:
@@ -67,7 +67,7 @@ index 584e10050..6a9ebf0e7 100644
          if self.valid_sampled_token_count_event is None:
              return
  
-@@ -5300,6 +5312,13 @@ class GPUModelRunner(
+@@ -5507,6 +5519,13 @@ class GPUModelRunner(
      def _get_valid_sampled_token_count(self) -> list[int]:
          # Wait until valid_sampled_tokens_count is copied to cpu,
          prev_sampled_token_ids = self.input_batch.prev_sampled_token_ids
@@ -81,6 +81,3 @@ index 584e10050..6a9ebf0e7 100644
          sampled_count_event = self.valid_sampled_token_count_event
          if sampled_count_event is None or prev_sampled_token_ids is None:
              return []
--- 
-2.43.0
-
