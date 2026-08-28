@@ -26,12 +26,18 @@ RUN set -eux; \
 # runtime config and the vulnerable codec surface is removed. Mooncake is not
 # configured for this deployment and is removed with its build cache.
 RUN set -eux; \
-    python3 -m pip uninstall -y opencv-python-headless mooncake-transfer-engine; \
+    for _ in 1 2 3; do \
+        DISTS="$(python3 -c 'import importlib.metadata as md; print(" ".join(sorted(set(md.packages_distributions().get("cv2") or []))))')"; \
+        [ -n "$DISTS" ] || break; \
+        python3 -m pip uninstall -y $DISTS; \
+    done; \
+    python3 -m pip uninstall -y mooncake-transfer-engine || true; \
     rm -rf /opt/uv/cache; \
     python3 - <<'PY'
 import importlib.util
 
-assert importlib.util.find_spec("cv2") is None
+spec = importlib.util.find_spec("cv2")
+assert spec is None, f"cv2 still importable from {spec.origin}"
 assert importlib.util.find_spec("mooncake") is None
 PY
 
