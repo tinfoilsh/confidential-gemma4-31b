@@ -27,18 +27,20 @@ RUN set -eux; \
 # configured for this deployment and is removed with its build cache.
 RUN set -eux; \
     for _ in 1 2 3; do \
-        DISTS="$(python3 -c 'import importlib.metadata as md; print(" ".join(sorted(set(md.packages_distributions().get("cv2") or []))))')"; \
+        DISTS="$(python3 -c 'import importlib.metadata as md; m = md.packages_distributions(); print(" ".join(sorted(set((m.get("cv2") or []) + (m.get("mooncake") or [])))))')"; \
         [ -n "$DISTS" ] || break; \
         python3 -m pip uninstall -y $DISTS; \
     done; \
-    python3 -m pip uninstall -y mooncake-transfer-engine || true; \
     rm -rf /opt/uv/cache; \
     python3 - <<'PY'
 import importlib.util
 
-spec = importlib.util.find_spec("cv2")
-assert spec is None, f"cv2 still importable from {spec.origin}"
-assert importlib.util.find_spec("mooncake") is None
+for module in ("cv2", "mooncake"):
+    spec = importlib.util.find_spec(module)
+    assert spec is None, (
+        f"{module} still importable: origin={spec.origin} "
+        f"search={spec.submodule_search_locations}"
+    )
 PY
 
 RUN python3 - <<'PY'
