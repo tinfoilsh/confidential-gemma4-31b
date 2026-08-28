@@ -8,7 +8,7 @@ Subject: [PATCH] fix: guard grammar-constrained Gemma repetition
  1 file changed, 25 insertions(+)
 
 diff --git a/vllm/sampling_params.py b/vllm/sampling_params.py
-index 25fb0db2f2..f9fc2f4442 100644
+index f62b11d56f..3d1c29ae14 100644
 --- a/vllm/sampling_params.py
 +++ b/vllm/sampling_params.py
 @@ -157,6 +157,14 @@ class StructuredOutputsParams:

@@ -5,8 +5,8 @@ Subject: [PATCH] security: allow deployments to reject regex constraints
 
 ---
  vllm/envs.py            | 6 ++++++
- vllm/sampling_params.py | 6 ++++++
- 2 files changed, 12 insertions(+)
+ vllm/sampling_params.py | 9 +++++++++
+ 2 files changed, 15 insertions(+)
 
 diff --git a/vllm/envs.py b/vllm/envs.py
 index ed62659cfa..0c0117beed 100755
@@ -33,10 +33,10 @@ index ed62659cfa..0c0117beed 100755
      # serialization/deserialization of tensors. Tensors below
      # this limit will be encoded into the msgpack buffer, and
 diff --git a/vllm/sampling_params.py b/vllm/sampling_params.py
-index 2f0af9e1b4..25fb0db2f2 100644
+index 2f0af9e1b4..f62b11d56f 100644
 --- a/vllm/sampling_params.py
 +++ b/vllm/sampling_params.py
-@@ -979,6 +979,12 @@ class SamplingParams(
+@@ -979,6 +979,15 @@ class SamplingParams(
                  "Structured outputs requires a tokenizer so it can't be used with 'skip_tokenizer_init'"  # noqa: E501
              )
  
@@ -44,7 +44,10 @@ index 2f0af9e1b4..25fb0db2f2 100644
 +            envs.VLLM_DISABLE_STRUCTURED_OUTPUT_REGEX
 +            and self.structured_outputs.regex is not None
 +        ):
-+            raise ValueError("structured_outputs.regex is disabled by the server")
++            raise VLLMValidationError(
++                "structured_outputs.regex is disabled by the server",
++                parameter="structured_outputs.regex",
++            )
 +
          backend = structured_outputs_config.backend
          if _backend := self.structured_outputs._backend:
