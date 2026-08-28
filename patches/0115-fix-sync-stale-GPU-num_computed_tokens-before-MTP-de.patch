@@ -33,7 +33,7 @@ Co-authored-by: factory-droid[bot] <138933559+factory-droid[bot]@users.noreply.g
  1 file changed, 32 insertions(+), 29 deletions(-)
 
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index fdcfbf5627..127cb26596 100644
+index d624e9fe61..ce229a2bc5 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
 @@ -1183,6 +1183,7 @@ class GPUModelRunner(

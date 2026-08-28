@@ -8,7 +8,7 @@ Subject: [PATCH] fix: initialize v0.25.1 runner pin-memory policy
  1 file changed, 1 insertion(+)
 
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index e186727e7e..30b7a4562b 100644
+index 6fff883b8d..70ebb1442d 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
 @@ -1160,6 +1160,7 @@ class GPUModelRunner(

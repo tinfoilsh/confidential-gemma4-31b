@@ -8,7 +8,7 @@ Subject: [PATCH] cc: publish mtp accepted counts from output worker early
  1 file changed, 82 insertions(+), 5 deletions(-)
 
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index 4ff7f74638..dd78bd3212 100644
+index 731b498d7b..fd8d6c8c2b 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
 @@ -198,7 +198,10 @@ from vllm.v1.pool.metadata import PoolingMetadata, PoolingStates

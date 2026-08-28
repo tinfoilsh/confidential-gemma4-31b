@@ -85,10 +85,26 @@ missing = [marker for marker in required if marker not in source]
 if missing:
     raise SystemExit(f"missing v0.28.0 CC patch markers: {missing}")
 
+# Import every patched module: a patch can apply cleanly yet reference a
+# name the new base no longer imports, which only explodes at engine start.
+import importlib
+
+for module in (
+    "vllm.v1.worker.gpu_model_runner",
+    "vllm.v1.worker.gpu_worker",
+    "vllm.v1.worker.block_table",
+    "vllm.v1.core.sched.scheduler",
+    "vllm.v1.engine.core",
+    "vllm.v1.spec_decode.llm_base_proposer",
+    "vllm.v1.spec_decode.extract_hidden_states",
+    "vllm.v1.sample.rejection_sampler",
+):
+    importlib.import_module(module)
+
 print("verified v0.28.0 V1 CC/MTP patch set")
 PY
 
 LABEL org.opencontainers.image.source="https://github.com/tinfoilsh/confidential-gemma4-31b" \
       org.opencontainers.image.revision="${SOURCE_REVISION}" \
-      com.tinfoil.vllm.runtime-revision="be50f78ce62c7979ba7e552164cf4757d4ccce33" \
+      com.tinfoil.vllm.runtime-revision="f724246cc77483c6023b216e4fbd80b467df3c9f" \
       com.tinfoil.vllm.variant="cc-mtp-perf-v0.28.0-v1"

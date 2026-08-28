@@ -8,7 +8,7 @@ Subject: [PATCH] cc: derive mtp accepted counts from output worker
  1 file changed, 26 insertions(+), 7 deletions(-)
 
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index f0352ba9e0..a12776bb14 100644
+index 90f5d5cb5a..c61b547e94 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
 @@ -1031,6 +1031,9 @@ class GPUModelRunner(

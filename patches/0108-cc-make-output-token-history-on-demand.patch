@@ -80,7 +80,7 @@ index 0b805fca76..e94398c98e 100644
              self.async_copy_ready_event = async_copy_ready_event
          else:
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index 74d2ff6056..54fe49a21a 100644
+index aa37259ce0..3a889e0616 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
 @@ -1475,7 +1475,7 @@ class GPUModelRunner(

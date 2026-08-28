@@ -8,7 +8,7 @@ Subject: [PATCH] cc: add uniform mtp spec metadata fast path
  1 file changed, 148 insertions(+)
 
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index a12776bb14..170be30a84 100644
+index c61b547e94..ea8a85ae51 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
 @@ -121,6 +121,7 @@ from vllm.sampling_params import SamplingType

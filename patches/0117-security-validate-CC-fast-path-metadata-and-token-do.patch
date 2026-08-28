@@ -70,7 +70,7 @@ index 0ab55ba304..d477f2ddd1 100644
          rows: list[int] = []
          starts: list[int] = []
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index 127cb26596..e186727e7e 100644
+index ce229a2bc5..6fff883b8d 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
 @@ -614,7 +614,7 @@ def _calc_valid_sampled_token_count(

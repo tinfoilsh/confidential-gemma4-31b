@@ -4,14 +4,14 @@ Date: Tue, 23 Jun 2026 16:56:15 -0400
 Subject: [PATCH] cc: add k1 output publication worker
 
 ---
- vllm/v1/worker/gpu_model_runner.py | 292 +++++++++++++++++++++++++++--
- 1 file changed, 272 insertions(+), 20 deletions(-)
+ vllm/v1/worker/gpu_model_runner.py | 294 ++++++++++++++++++++++++++---
+ 1 file changed, 273 insertions(+), 21 deletions(-)
 
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index ed1635f7fd..74d2ff6056 100644
+index ed1635f7fd..aa37259ce0 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
-@@ -5,6 +5,7 @@ import functools
+@@ -5,13 +5,14 @@ import functools
  import gc
  import itertools
  import os
@@ -19,6 +19,14 @@ index ed1635f7fd..74d2ff6056 100644
  import threading
  import time
  from collections import defaultdict
+ from collections.abc import Callable, Iterable, Iterator, Sequence
+ from contextlib import AbstractContextManager, contextmanager, nullcontext
+ from copy import copy, deepcopy
+-from dataclasses import replace
++from dataclasses import dataclass, replace
+ from functools import reduce
+ from typing import TYPE_CHECKING, Any, NamedTuple, TypeAlias, cast
+ 
 @@ -398,6 +399,208 @@ class AsyncGPUModelRunnerOutput(AsyncModelRunnerOutput):
          return output
  

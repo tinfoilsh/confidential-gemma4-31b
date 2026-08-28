@@ -546,7 +546,7 @@ index 79635021f2..0de0d08563 100644
 +        values = tl.load(values_ptr + offsets, mask=mask)
 +        tl.store(row_ptr + offsets, values, mask=mask)
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index 170be30a84..4ff7f74638 100644
+index ea8a85ae51..731b498d7b 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
 @@ -154,6 +154,11 @@ from vllm.v1.attention.backends.utils import (
