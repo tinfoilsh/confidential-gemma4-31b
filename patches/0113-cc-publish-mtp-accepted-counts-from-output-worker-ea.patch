@@ -1,18 +1,17 @@
-From a8e67ebd75081473d1cec5ceeb4801a1b8c18314 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Jules Drean <jules@tinfoil.sh>
 Date: Thu, 25 Jun 2026 14:02:26 -0400
-Subject: [PATCH 113/117] cc: publish mtp accepted counts from output worker
- early
+Subject: [PATCH] cc: publish mtp accepted counts from output worker early
 
 ---
  vllm/v1/worker/gpu_model_runner.py | 87 ++++++++++++++++++++++++++++--
  1 file changed, 82 insertions(+), 5 deletions(-)
 
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index 073ec494e..b114e1eeb 100644
+index 731b498d7b..fd8d6c8c2b 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
-@@ -186,7 +186,10 @@ from vllm.v1.pool.metadata import PoolingMetadata, PoolingStates
+@@ -198,7 +198,10 @@ from vllm.v1.pool.metadata import PoolingMetadata, PoolingStates
  from vllm.v1.sample.logits_processor import LogitsProcessors, build_logitsprocs
  from vllm.v1.sample.logits_processor.interface import LogitsProcessor
  from vllm.v1.sample.metadata import SamplingMetadata
@@ -24,7 +23,7 @@ index 073ec494e..b114e1eeb 100644
  from vllm.v1.sample.sampler import Sampler
  from vllm.v1.spec_decode.custom_class_proposer import create_custom_proposer
  from vllm.v1.spec_decode.dflash import DFlashProposer
-@@ -502,20 +505,41 @@ class CCOutputPublicationResult:
+@@ -562,20 +565,41 @@ class CCOutputPublicationResult:
  class CCOutputPublication:
      def __init__(self) -> None:
          self._done = threading.Event()
@@ -66,7 +65,7 @@ index 073ec494e..b114e1eeb 100644
      def result(self) -> CCOutputPublicationResult:
          self._done.wait()
          if self._error is not None:
-@@ -524,6 +548,20 @@ class CCOutputPublication:
+@@ -584,6 +608,20 @@ class CCOutputPublication:
          return self._result
  
  
@@ -87,7 +86,7 @@ index 073ec494e..b114e1eeb 100644
  @dataclass
  class CCSpecDecodeCpuCorrectionItem:
      req_id: str
-@@ -550,9 +588,11 @@ class CCOutputPublicationWorker:
+@@ -610,9 +648,11 @@ class CCOutputPublicationWorker:
          *,
          device: torch.device,
          pin_memory: bool,
@@ -99,7 +98,7 @@ index 073ec494e..b114e1eeb 100644
          self._queue: queue.Queue[CCOutputPublicationTask | None] = queue.Queue()
          self._thread = threading.Thread(
              target=self._run,
-@@ -620,6 +660,15 @@ class CCOutputPublicationWorker:
+@@ -680,6 +720,15 @@ class CCOutputPublicationWorker:
                      )
                  copy_stream.synchronize()
                  max_gen_len = sampled_token_ids_cpu.shape[-1]
@@ -115,7 +114,7 @@ index 073ec494e..b114e1eeb 100644
                  if max_gen_len == 1:
                      sampled_token_ids = sampled_token_ids_cpu.tolist()
                      for i in task.invalid_req_indices:
-@@ -1092,6 +1141,24 @@ class GPUModelRunner(
+@@ -1158,6 +1207,24 @@ class GPUModelRunner(
              )
          if self.cc_output_worker_enabled:
              logger.info("Using experimental CC output publication worker.")
@@ -140,7 +139,7 @@ index 073ec494e..b114e1eeb 100644
          self._cc_output_publication_worker: CCOutputPublicationWorker | None = None
          self._cc_valid_sampled_token_count_publication: (
              CCOutputPublication | None
-@@ -1557,6 +1624,7 @@ class GPUModelRunner(
+@@ -1645,6 +1712,7 @@ class GPUModelRunner(
              worker = CCOutputPublicationWorker(
                  device=self.device,
                  pin_memory=self.pin_memory,
@@ -148,7 +147,7 @@ index 073ec494e..b114e1eeb 100644
              )
              self._cc_output_publication_worker = worker
          return worker
-@@ -1658,8 +1726,17 @@ class GPUModelRunner(
+@@ -1746,8 +1814,17 @@ class GPUModelRunner(
                  "missing_prev_index": missing_prev_index,
                  "missing_current_req": missing_current_req,
                  "is_ngram_gpu": is_ngram_gpu,
@@ -168,7 +167,7 @@ index 073ec494e..b114e1eeb 100644
  
      def _update_states(self, scheduler_output: "SchedulerOutput") -> Callable | None:
          """Update the cached states and the persistent batch with the scheduler
-@@ -6036,8 +6113,8 @@ class GPUModelRunner(
+@@ -6243,8 +6320,8 @@ class GPUModelRunner(
              prev_sampled_token_ids is not None
              and self._cc_valid_sampled_token_count_publication is not None
          ):
@@ -179,6 +178,3 @@ index 073ec494e..b114e1eeb 100644
  
          sampled_count_event = self.valid_sampled_token_count_event
          if sampled_count_event is None or prev_sampled_token_ids is None:
--- 
-2.43.0
-

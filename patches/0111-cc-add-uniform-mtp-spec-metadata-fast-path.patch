@@ -1,26 +1,26 @@
-From ec984a5ab70302e2c5028d5713e7dcf548b826f5 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Jules Drean <jules@tinfoil.sh>
 Date: Wed, 24 Jun 2026 04:23:33 -0400
-Subject: [PATCH 111/117] cc: add uniform mtp spec metadata fast path
+Subject: [PATCH] cc: add uniform mtp spec metadata fast path
 
 ---
  vllm/v1/worker/gpu_model_runner.py | 148 +++++++++++++++++++++++++++++
  1 file changed, 148 insertions(+)
 
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index 6a9ebf0e7..4ae5f8922 100644
+index c61b547e94..ea8a85ae51 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
-@@ -113,6 +113,7 @@ from vllm.sampling_params import SamplingType
+@@ -121,6 +121,7 @@ from vllm.sampling_params import SamplingType
  from vllm.sequence import IntermediateTensors
  from vllm.tasks import GenerationTask, PoolingTask, SupportedTask
  from vllm.tracing import instrument
 +from vllm.triton_utils import tl, triton
  from vllm.utils import length_from_prompt_token_ids_or_embeds
+ from vllm.utils.gpu_sync_debug import gpu_sync_allowed
  from vllm.utils.math_utils import cdiv, round_up
- from vllm.utils.mem_utils import DeviceMemoryProfiler, format_gib
-@@ -244,6 +245,33 @@ AttnMetadataDict: TypeAlias = dict[str, AttentionMetadata]
- PerLayerAttnMetadata: TypeAlias = list[AttnMetadataDict] | AttnMetadataDict
+@@ -289,6 +290,33 @@ def nans_to_dict(counts: list[int], req_id_to_index: dict[str, int]) -> dict[str
+     }
  
  
 +@triton.jit
@@ -53,7 +53,7 @@ index 6a9ebf0e7..4ae5f8922 100644
  # Wrapper for ModelRunnerOutput to support overlapped execution.
  class AsyncGPUModelRunnerOutput(AsyncModelRunnerOutput):
      def __init__(
-@@ -945,6 +973,11 @@ class GPUModelRunner(
+@@ -1011,6 +1039,11 @@ class GPUModelRunner(
          self._cc_decode_metadata_arange_i64_gpu: torch.Tensor | None = None
          self._cc_decode_metadata_fast_ready_req_ids: tuple[str, ...] | None = None
          self._cc_decode_metadata_has_logged_engaged = False
@@ -65,7 +65,7 @@ index 6a9ebf0e7..4ae5f8922 100644
          cc_output_worker_requested = bool(
              int(os.environ.get("VLLM_CC_OUTPUT_WORKER", "0") or "0")
          )
-@@ -2002,6 +2035,25 @@ class GPUModelRunner(
+@@ -2096,6 +2129,25 @@ class GPUModelRunner(
              arange_size, dtype=torch.int64, device=self.device
          )
  
@@ -91,7 +91,7 @@ index 6a9ebf0e7..4ae5f8922 100644
      def _cc_uniform_decode_metadata_primeable(
          self,
          scheduler_output: "SchedulerOutput",
-@@ -3229,6 +3281,13 @@ class GPUModelRunner(
+@@ -3348,6 +3400,13 @@ class GPUModelRunner(
          # Compute the logits indices.
          # [4, 1, 3, 1, 2]
          num_sampled_tokens = num_draft_tokens + 1
@@ -105,7 +105,7 @@ index 6a9ebf0e7..4ae5f8922 100644
  
          # Step 1.
          # cu_num_sampled_tokens: [4, 5, 8, 9, 11]
-@@ -3286,6 +3345,95 @@ class GPUModelRunner(
+@@ -3405,6 +3464,95 @@ class GPUModelRunner(
              logits_indices=logits_indices,
          )
  
@@ -201,6 +201,3 @@ index 6a9ebf0e7..4ae5f8922 100644
      def _prepare_kv_sharing_fast_prefill(
          self,
          logits_indices: torch.Tensor,
--- 
-2.43.0
-

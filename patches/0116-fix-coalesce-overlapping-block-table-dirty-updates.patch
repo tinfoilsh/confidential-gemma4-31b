@@ -1,17 +1,17 @@
-From 6c609d5b64ed8e29e009741608684aec17780dbb Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Jules Drean <jules@tinfoil.sh>
 Date: Wed, 22 Jul 2026 04:12:27 +0000
-Subject: [PATCH 116/117] fix: coalesce overlapping block-table dirty updates
+Subject: [PATCH] fix: coalesce overlapping block-table dirty updates
 
 ---
  vllm/v1/worker/block_table.py | 72 +++++++++++++++++++++++++++++++----
  1 file changed, 64 insertions(+), 8 deletions(-)
 
 diff --git a/vllm/v1/worker/block_table.py b/vllm/v1/worker/block_table.py
-index 97743af99..f31005985 100644
+index 0de0d08563..0ab55ba304 100644
 --- a/vllm/v1/worker/block_table.py
 +++ b/vllm/v1/worker/block_table.py
-@@ -224,10 +224,13 @@ class BlockTable:
+@@ -270,10 +270,13 @@ class BlockTable:
          if not self._block_table_dirty:
              return
  
@@ -29,7 +29,7 @@ index 97743af99..f31005985 100644
  
          self.block_table.copy_to_gpu(num_reqs)
          self._clear_dirty_updates()
-@@ -286,9 +289,59 @@ class BlockTable:
+@@ -332,9 +335,59 @@ class BlockTable:
              device=self.device,
          )
  
@@ -91,7 +91,7 @@ index 97743af99..f31005985 100644
          if n_updates == 0 or n_values == 0:
              self._clear_dirty_updates()
              return True
-@@ -316,14 +369,14 @@ class BlockTable:
+@@ -362,14 +415,14 @@ class BlockTable:
          packed_gpu = self._dirty_packed_gpu[:packed_len]
  
          for i, (row, start, cu_len) in enumerate(
@@ -108,7 +108,7 @@ index 97743af99..f31005985 100644
              dtype=torch.int32,
              device="cpu",
          )
-@@ -337,6 +390,7 @@ class BlockTable:
+@@ -383,6 +436,7 @@ class BlockTable:
                  "bytes": packed_len * 4,
                  "dtype": "torch.int32",
                  "pin_memory": self.pin_memory,
@@ -116,7 +116,7 @@ index 97743af99..f31005985 100644
                  "num_updates": n_updates,
                  "num_values": n_values,
                  "full_copy_bytes_avoided": max(0, (full_copy_elems - packed_len) * 4),
-@@ -348,6 +402,7 @@ class BlockTable:
+@@ -394,6 +448,7 @@ class BlockTable:
              "ccbench.block_table.dirty_update.apply",
              {
                  "num_updates": n_updates,
@@ -124,7 +124,7 @@ index 97743af99..f31005985 100644
                  "num_values": n_values,
                  "packed_bytes": packed_len * 4,
                  "full_copy_bytes_avoided": max(0, (full_copy_elems - packed_len) * 4),
-@@ -365,6 +420,7 @@ class BlockTable:
+@@ -411,6 +466,7 @@ class BlockTable:
              "ccbench.block_table.dirty_update.summary",
              {
                  "num_updates": n_updates,
@@ -132,6 +132,3 @@ index 97743af99..f31005985 100644
                  "num_values": n_values,
                  "packed_bytes": packed_len * 4,
                  "full_copy_bytes_avoided": max(0, (full_copy_elems - packed_len) * 4),
--- 
-2.43.0
-
