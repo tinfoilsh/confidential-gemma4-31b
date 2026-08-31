@@ -1,9 +1,12 @@
 # vLLM v0.25.1 Deployment Patches
 
-These 19 patches apply in filename order to the official vLLM v0.25.1
-Python package. They were generated from
-`tinfoilsh/vllm-cc-opt:milestone/gemma4-cc-v0251-v1-perf-b300-20260722` at
-commit `f7ccdd0596cb6899bc0b32a1ca581d9f67250db7`.
+These patches apply in filename order to the official vLLM v0.25.1
+Python package. `0101`-`0119` were generated from
+`tinfoilsh/vllm-cc-opt:milestone/gemma4-cc-v0251-v1-perf-b300-20260722`.
+`0120`-`0121` continue that series on
+`tinfoilsh/vllm-cc-opt:security/gemma4-tool-parser-dos-20260728`, branched
+from its tip. The whole series is exported from commit
+`2c8af33d916a7e26255b130b513bdc7cc99ffe92`.
 
 ## Included
 
@@ -30,6 +33,22 @@ commit `f7ccdd0596cb6899bc0b32a1ca581d9f67250db7`.
 - `0119` initializes the v0.25.1 runner's host-staging policy for the ported
   output and metadata paths. It fixes the missing `pin_memory` attribute found
   by the first full-CC endpoint request.
+- `0120` bounds the Gemma4 tool-argument parser's nesting depth. The
+  recursive-descent parser re-sliced the buffer at each level, so a deeply
+  nested tool-call argument caused quadratic CPU growth and, past the Python
+  recursion limit, a RecursionError surfacing as HTTP 500 that stalled the
+  frontend event loop -- a remotely triggerable DoS via crafted model output.
+  Capping at depth 64 (far above any real tool call) truncates deeper
+  structure with a warning instead of crashing. Reproduced and verified on
+  the shipped v0.0.23 image; upstream fixed the analogous issue only in the
+  (experimental, unusable-with-our-config) Rust frontend.
+- `0121` stops the Gemma4 parser re-parsing the whole argument buffer on every
+  streamed structural token, which made a large tool call cost O(N^2): a 3,200
+  pair call burned 22 s of frontend CPU. Arguments are now converted once when
+  the tool call ends, so cost is linear and the assembled arguments are
+  byte-identical. Tool names still stream immediately; only the argument blob
+  arrives in a single delta, and nothing downstream can act on partial
+  arguments anyway.
 
 ## Removed From v0.23.0
 
@@ -49,5 +68,5 @@ Run:
 validation/verify_patch_series.sh /path/to/vllm-checkout
 ```
 
-The script checks out v0.25.1, applies all 19 patches with zero fuzz, and
+The script checks out v0.25.1, applies all 21 patches with zero fuzz, and
 diffs the result against the source branch commit above.

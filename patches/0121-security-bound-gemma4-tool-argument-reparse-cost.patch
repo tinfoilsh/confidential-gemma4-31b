@@ -1,0 +1,27 @@
+From 2c8af33d916a7e26255b130b513bdc7cc99ffe92 Mon Sep 17 00:00:00 2001
+From: Daniel MS <danielmccannsayles@gmail.com>
+Date: Tue, 28 Jul 2026 15:32:32 -0700
+Subject: [PATCH 121/121] security: bound Gemma4 tool argument re-parse cost
+
+Streaming re-parsed the entire argument buffer on every structural token,
+making a large tool call O(N^2). Arguments are now converted once at
+tool-call end; the emitted arguments are unchanged.
+---
+ vllm/parser/gemma4.py | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/vllm/parser/gemma4.py b/vllm/parser/gemma4.py
+index db8630d75..3e92cc5b9 100644
+--- a/vllm/parser/gemma4.py
++++ b/vllm/parser/gemma4.py
+@@ -396,6 +396,7 @@ def gemma4_config() -> ParserEngineConfig:
+             ParserState.TOOL_ARGS: EventType.ARG_VALUE_CHUNK,
+         },
+         arg_converter=_gemma4_arg_converter,
++        stream_arg_deltas=False,
+         tool_args_json=False,
+         arg_structural_chars=frozenset(",:{}[]<"),
+         preserve_tokens=frozenset({STRING_DELIM}),
+-- 
+2.39.3 (Apple Git-146)
+
