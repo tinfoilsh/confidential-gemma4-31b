@@ -127,6 +127,12 @@ if missing:
 print("verified v0.25.1 V1 CC/MTP patch set")
 PY
 
+ADD --checksum=sha256:dd654b19b81907030ecd3b3229c10282df2a16bdae49f7beaaa423b54a4caec4 \
+    https://raw.githubusercontent.com/tinfoilsh/tinfoil-usage/5d0a81fe9c5345b734b385449563adf02a476b26/tinfoil_usage.py \
+    /opt/tinfoil/tinfoil_usage.py
+ENV PYTHONPATH=/opt/tinfoil
+RUN python3 -B -c "import tinfoil_usage; print('usage metering ready:', tinfoil_usage.TRAILER_SUPPORT)"
+
 LABEL org.opencontainers.image.source="https://github.com/tinfoilsh/confidential-gemma4-31b" \
       org.opencontainers.image.revision="${SOURCE_REVISION}" \
       com.tinfoil.vllm.runtime-revision="f7ccdd0596cb6899bc0b32a1ca581d9f67250db7" \
