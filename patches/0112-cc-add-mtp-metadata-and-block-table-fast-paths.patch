@@ -5,12 +5,12 @@ Subject: [PATCH] cc: add mtp metadata and block-table fast paths
 
 ---
  vllm/v1/ccbench_instrumentation.py           | 121 +++
- vllm/v1/spec_decode/extract_hidden_states.py |   7 +-
+ vllm/v1/spec_decode/extract_hidden_states.py |   8 +-
  vllm/v1/spec_decode/llm_base_proposer.py     |   1 +
  vllm/v1/utils.py                             |   3 +
  vllm/v1/worker/block_table.py                | 233 +++++-
  vllm/v1/worker/gpu_model_runner.py           | 744 ++++++++++++++++---
- 6 files changed, 1014 insertions(+), 95 deletions(-)
+ 6 files changed, 1015 insertions(+), 95 deletions(-)
  create mode 100644 vllm/v1/ccbench_instrumentation.py
 
 diff --git a/vllm/v1/ccbench_instrumentation.py b/vllm/v1/ccbench_instrumentation.py
@@ -141,10 +141,18 @@ index 0000000000..722563f063
 +    except Exception:
 +        return 0
 diff --git a/vllm/v1/spec_decode/extract_hidden_states.py b/vllm/v1/spec_decode/extract_hidden_states.py
-index 6325c1bf5d..307cd49de1 100644
+index 6325c1bf5d..37cc823b63 100644
 --- a/vllm/v1/spec_decode/extract_hidden_states.py
 +++ b/vllm/v1/spec_decode/extract_hidden_states.py
-@@ -58,7 +58,12 @@ class ExtractHiddenStatesProposer:
+@@ -15,6 +15,7 @@ from vllm.model_executor.layers.attention_layer_base import AttentionLayerBase
+ from vllm.model_executor.model_loader import get_model
+ from vllm.v1.attention.backend import AttentionMetadataBuilder, CommonAttentionMetadata
+ from vllm.v1.cudagraph_dispatcher import CudagraphDispatcher
++from vllm.utils.torch_utils import PIN_MEMORY
+ from vllm.v1.utils import CpuGpuBuffer
+ from vllm.v1.worker.dp_utils import coordinate_batch_across_dp
+ from vllm.v1.worker.gpu_input_batch import CachedRequestState, InputBatch
+@@ -58,7 +59,12 @@ class ExtractHiddenStatesProposer:
          )
  
          self.backup_next_token_ids = CpuGpuBuffer(
