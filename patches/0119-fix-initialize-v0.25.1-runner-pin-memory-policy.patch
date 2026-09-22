@@ -1,4 +1,4 @@
-From f7ccdd0596cb6899bc0b32a1ca581d9f67250db7 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Jules Drean <jules@tinfoil.sh>
 Date: Wed, 22 Jul 2026 21:12:00 +0000
 Subject: [PATCH] fix: initialize v0.25.1 runner pin-memory policy
@@ -8,17 +8,14 @@ Subject: [PATCH] fix: initialize v0.25.1 runner pin-memory policy
  1 file changed, 1 insertion(+)
 
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index 96b2ebbd7..155a887e0 100644
+index 6fff883b8d..70ebb1442d 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
-@@ -1094,6 +1094,7 @@ class GPUModelRunner(
-             cp_kv_cache_interleave_size=self.parallel_config.cp_kv_cache_interleave_size,
+@@ -1160,6 +1160,7 @@ class GPUModelRunner(
              reasoning_config=self.vllm_config.reasoning_config,
+             use_replayssm=self.cache_config.use_replayssm,
          )
 +        self.pin_memory = PIN_MEMORY
  
          # Separate cuda stream for overlapping transfer of sampled token ids from
          # GPU to CPU when async scheduling is enabled.
--- 
-2.43.0
-

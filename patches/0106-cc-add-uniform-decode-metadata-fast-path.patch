@@ -1,27 +1,26 @@
-From 58f5edfda8a6d9e0110bd2baf4ea8556bfc58d16 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Jules Drean <jules@tinfoil.sh>
 Date: Tue, 23 Jun 2026 15:49:39 -0400
-Subject: [PATCH 106/117] cc: add uniform decode metadata fast path
+Subject: [PATCH] cc: add uniform decode metadata fast path
 
 ---
- vllm/v1/worker/block_table.py      |  20 +-
+ vllm/v1/worker/block_table.py      |  19 +-
  vllm/v1/worker/gpu_model_runner.py | 313 ++++++++++++++++++++++-------
- 2 files changed, 254 insertions(+), 79 deletions(-)
+ 2 files changed, 253 insertions(+), 79 deletions(-)
 
 diff --git a/vllm/v1/worker/block_table.py b/vllm/v1/worker/block_table.py
-index d9c041ba0..5fbd06bab 100644
+index 85228364af..79635021f2 100644
 --- a/vllm/v1/worker/block_table.py
 +++ b/vllm/v1/worker/block_table.py
-@@ -1,6 +1,8 @@
- # SPDX-License-Identifier: Apache-2.0
+@@ -2,6 +2,7 @@
  # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
  
+ import math
 +import os
-+
- import numpy as np
- import torch
+ from enum import Enum
  
-@@ -71,6 +73,10 @@ class BlockTable:
+ import numpy as np
+@@ -106,6 +107,10 @@ class BlockTable:
              self.max_num_reqs, self.max_num_blocks_per_req, dtype=torch.int32
          )
          self.num_blocks_per_row = np.zeros(max_num_reqs, dtype=np.int32)
@@ -32,7 +31,7 @@ index d9c041ba0..5fbd06bab 100644
  
          self.slot_mapping = self._make_buffer(
              self.max_num_batched_tokens, dtype=torch.int64
-@@ -116,15 +122,18 @@ class BlockTable:
+@@ -152,15 +157,18 @@ class BlockTable:
          start = self.num_blocks_per_row[row_idx]
          self.num_blocks_per_row[row_idx] += num_blocks
          self.block_table.np[row_idx, start : start + num_blocks] = block_ids
@@ -51,10 +50,10 @@ index d9c041ba0..5fbd06bab 100644
          self.num_blocks_per_row[row_idx] = 0
  
      def move_row(self, src: int, tgt: int) -> None:
-@@ -132,11 +141,13 @@ class BlockTable:
-         block_table_np = self.block_table.np
-         block_table_np[tgt, :num_blocks] = block_table_np[src, :num_blocks]
-         self.num_blocks_per_row[tgt] = num_blocks
+@@ -173,11 +181,13 @@ class BlockTable:
+         # after the blocks have been freed and reallocated.
+         block_table_np[src, :num_blocks] = 0
+         self.num_blocks_per_row[src] = 0
 +        self._block_table_dirty = True
  
      def swap_row(self, src: int, tgt: int) -> None:
@@ -65,7 +64,7 @@ index d9c041ba0..5fbd06bab 100644
  
      def compute_slot_mapping(
          self,
-@@ -164,11 +175,18 @@ class BlockTable:
+@@ -211,11 +221,18 @@ class BlockTable:
          )
  
      def commit_block_table(self, num_reqs: int) -> None:
@@ -86,7 +85,7 @@ index d9c041ba0..5fbd06bab 100644
      @staticmethod
      def map_to_kernel_blocks(
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index db6c2fe34..feaca12eb 100644
+index 9087f87854..ed1635f7fd 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
 @@ -4,6 +4,7 @@
@@ -97,7 +96,7 @@ index db6c2fe34..feaca12eb 100644
  import threading
  import time
  from collections import defaultdict
-@@ -725,6 +726,16 @@ class GPUModelRunner(
+@@ -791,6 +792,16 @@ class GPUModelRunner(
              # under TP contention that spin can balloon and make the rank a straggler.
              self.prepare_inputs_event = torch.cuda.Event(blocking=True)
  
@@ -114,7 +113,7 @@ index db6c2fe34..feaca12eb 100644
          # self.cudagraph_batch_sizes sorts in ascending order.
          if (
              self.compilation_config.cudagraph_capture_sizes
-@@ -1721,6 +1732,121 @@ class GPUModelRunner(
+@@ -1815,6 +1826,121 @@ class GPUModelRunner(
  
          return cu_num_tokens
  
@@ -236,7 +235,7 @@ index db6c2fe34..feaca12eb 100644
      def _compute_prev_positions(self, num_reqs: int) -> None:
          """Build prev_positions mapping: current pos -> previous pos (-1 if new).
  
-@@ -1942,13 +2068,32 @@ class GPUModelRunner(
+@@ -2042,13 +2168,32 @@ class GPUModelRunner(
          cu_num_tokens = self._get_cumsum_and_arange(
              num_scheduled_tokens, self.query_pos.np
          )
@@ -274,7 +273,7 @@ index db6c2fe34..feaca12eb 100644
          # Calculate M-RoPE positions.
          # Only relevant for models using M-RoPE (e.g, Qwen2-VL)
          if self.uses_mrope:
-@@ -1959,78 +2104,82 @@ class GPUModelRunner(
+@@ -2059,78 +2204,82 @@ class GPUModelRunner(
          if self.uses_xdrope_dim > 0:
              self._calc_xdrope_positions(scheduler_output)
  
@@ -415,7 +414,7 @@ index db6c2fe34..feaca12eb 100644
          query_start_loc = self.query_start_loc.gpu[: num_reqs + 1]
  
          # Compute optimistic seq_lens (assumes all draft tokens from previous
-@@ -2046,18 +2195,18 @@ class GPUModelRunner(
+@@ -2146,18 +2295,18 @@ class GPUModelRunner(
  
          # Build prev_positions mapping: current pos -> prev pos (-1 if new).
          # Used for gathering from previous iteration's GPU tensors.
@@ -443,7 +442,7 @@ index db6c2fe34..feaca12eb 100644
  
          # Sync num_accepted_tokens from CPU (set by
          # _update_states_after_model_execute for hybrid models).
-@@ -2108,7 +2257,9 @@ class GPUModelRunner(
+@@ -2208,7 +2357,9 @@ class GPUModelRunner(
          # CPU values are optimistic (all drafts accepted). The kernel
          # corrects on GPU using the previous step's
          # valid_sampled_token_count_gpu. Otherwise, just copy from CPU.
@@ -454,7 +453,7 @@ index db6c2fe34..feaca12eb 100644
              self.use_async_spec_decode
              and self.valid_sampled_token_count_gpu is not None
              and prev_req_id_to_index
-@@ -2132,13 +2283,15 @@ class GPUModelRunner(
+@@ -2232,13 +2383,15 @@ class GPUModelRunner(
                  non_blocking=True,
              )
  
@@ -475,7 +474,7 @@ index db6c2fe34..feaca12eb 100644
          num_scheduled_tokens_gpu = self.num_scheduled_tokens.gpu[:num_reqs]
          self.positions[:total_num_scheduled_tokens] = (
              self.num_computed_tokens[req_indices_gpu].to(torch.int64)
-@@ -2231,6 +2384,10 @@ class GPUModelRunner(
+@@ -2341,6 +2494,10 @@ class GPUModelRunner(
                  self.input_batch, num_scheduled_tokens, num_sampled_tokens
              )
  
@@ -486,6 +485,3 @@ index db6c2fe34..feaca12eb 100644
          return (
              logits_indices,
              spec_decode_metadata,
--- 
-2.43.0
-

@@ -1,8 +1,8 @@
-From 3b278c6cb4e53e1bab9b1e28cdf9c81a92b1d17a Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Jules Drean <jules@tinfoil.sh>
 Date: Sat, 27 Jun 2026 07:56:03 +0000
-Subject: [PATCH 114/117] fix: sync stale GPU num_computed_tokens before MTP
- decode metadata kernel
+Subject: [PATCH] fix: sync stale GPU num_computed_tokens before MTP decode
+ metadata kernel
 
 The _cc_uniform_mtp_decode_metadata_kernel reads num_computed_tokens from GPU
 and adds valid_count. On the first MTP decode step (transition from prefill),
@@ -26,10 +26,10 @@ Co-authored-by: factory-droid[bot] <138933559+factory-droid[bot]@users.noreply.g
  1 file changed, 32 insertions(+)
 
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index b114e1eeb..647683221 100644
+index fd8d6c8c2b..d624e9fe61 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
-@@ -2563,6 +2563,38 @@ class GPUModelRunner(
+@@ -2657,6 +2657,38 @@ class GPUModelRunner(
          assert self.valid_sampled_token_count_gpu is not None
          k_sampled = k_draft + 1
  
@@ -68,6 +68,3 @@ index b114e1eeb..647683221 100644
          if not self._cc_mtp_decode_metadata_has_logged_engaged:
              logger.info(
                  "VLLM_CC_DECODE_METADATA_FASTPATH MTP engaged: "
--- 
-2.43.0
-

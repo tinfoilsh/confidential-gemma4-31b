@@ -1,17 +1,17 @@
-From f0f900ccfcb055f7191102824749372b8bcc08db Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Jules Drean <jules@tinfoil.sh>
 Date: Wed, 24 Jun 2026 04:18:36 -0400
-Subject: [PATCH 109/117] cc: make mtp output publication worker cc gated
+Subject: [PATCH] cc: make mtp output publication worker cc gated
 
 ---
  vllm/v1/worker/gpu_model_runner.py | 107 +++++++++++++++++------------
  1 file changed, 64 insertions(+), 43 deletions(-)
 
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index bb6ad2d8e..584e10050 100644
+index 3a889e0616..90f5d5cb5a 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
-@@ -384,9 +384,9 @@ def _copy_routed_experts_to_cpu_nonblocking(
+@@ -444,9 +444,9 @@ def _copy_routed_experts_to_cpu_nonblocking(
  
  @dataclass
  class CCOutputPublicationResult:
@@ -24,7 +24,7 @@ index bb6ad2d8e..584e10050 100644
  
  
  class CCOutputPublication:
-@@ -416,6 +416,8 @@ class CCOutputPublicationTask:
+@@ -476,6 +476,8 @@ class CCOutputPublicationTask:
      sampled_token_ids: torch.Tensor
      logprobs_tensors: LogprobsTensors | None
      routed_experts: RoutedExpertsTensors | None
@@ -33,7 +33,7 @@ index bb6ad2d8e..584e10050 100644
      ready_event: torch.Event
      publication: CCOutputPublication
  
-@@ -443,6 +445,8 @@ class CCOutputPublicationWorker:
+@@ -503,6 +505,8 @@ class CCOutputPublicationWorker:
          sampled_token_ids: torch.Tensor,
          logprobs_tensors: LogprobsTensors | None,
          routed_experts: RoutedExpertsTensors | None,
@@ -42,7 +42,7 @@ index bb6ad2d8e..584e10050 100644
      ) -> CCOutputPublication:
          ready_event = torch.Event()
          ready_event.record(torch.cuda.current_stream())
-@@ -452,6 +456,8 @@ class CCOutputPublicationWorker:
+@@ -512,6 +516,8 @@ class CCOutputPublicationWorker:
                  sampled_token_ids=sampled_token_ids,
                  logprobs_tensors=logprobs_tensors,
                  routed_experts=routed_experts,
@@ -51,7 +51,7 @@ index bb6ad2d8e..584e10050 100644
                  ready_event=ready_event,
                  publication=publication,
              )
-@@ -481,19 +487,43 @@ class CCOutputPublicationWorker:
+@@ -541,19 +547,43 @@ class CCOutputPublicationWorker:
              try:
                  task.ready_event.synchronize()
                  with torch.cuda.stream(copy_stream):
@@ -106,7 +106,7 @@ index bb6ad2d8e..584e10050 100644
              except BaseException as exc:
                  task.publication.set_error(exc)
  
-@@ -503,40 +533,17 @@ class AsyncGPUWorkerModelRunnerOutput(AsyncModelRunnerOutput):
+@@ -563,40 +593,17 @@ class AsyncGPUWorkerModelRunnerOutput(AsyncModelRunnerOutput):
          self,
          model_runner_output: ModelRunnerOutput,
          publication: CCOutputPublication,
@@ -150,7 +150,7 @@ index bb6ad2d8e..584e10050 100644
  
          return output
  
-@@ -938,9 +945,23 @@ class GPUModelRunner(
+@@ -1004,9 +1011,23 @@ class GPUModelRunner(
          self._cc_decode_metadata_arange_i64_gpu: torch.Tensor | None = None
          self._cc_decode_metadata_fast_ready_req_ids: tuple[str, ...] | None = None
          self._cc_decode_metadata_has_logged_engaged = False
@@ -175,7 +175,7 @@ index bb6ad2d8e..584e10050 100644
          if self.cc_output_worker_enabled:
              logger.info("Using experimental CC output publication worker.")
          self._cc_output_publication_worker: CCOutputPublicationWorker | None = None
-@@ -5120,9 +5141,9 @@ class GPUModelRunner(
+@@ -5324,9 +5345,9 @@ class GPUModelRunner(
                          sampled_token_ids=sampler_output.sampled_token_ids,
                          logprobs_tensors=sampler_output.logprobs_tensors,
                          routed_experts=routed_experts_snapshot,
@@ -187,6 +187,3 @@ index bb6ad2d8e..584e10050 100644
                  )
                  self.input_batch.sampled_token_ids_cpu = None
                  self.input_batch.async_copy_ready_event = None
--- 
-2.43.0
-
