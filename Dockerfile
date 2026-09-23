@@ -3,6 +3,9 @@
 # CC/MTP-optimized vLLM v0.25.1 V1 candidate. The amd64 base is digest-pinned so
 # the full-CC comparison can be reproduced independently of mutable tags.
 ARG VLLM_BASE_IMAGE=vllm/vllm-openai:v0.25.1@sha256:f0b9a0dc75a9fca3b6811e3279367b2d6a448055a000bfd13859587d74cef268
+ARG SIDECAR_IMAGE=ghcr.io/tinfoilsh/inference-sidecar@sha256:65ce23d6560c46a1e8614ede187fcbf9798b267aa33878905b4872404787f47d
+FROM ${SIDECAR_IMAGE} AS sidecar
+
 FROM ${VLLM_BASE_IMAGE}
 
 ARG SOURCE_REVISION=unversioned
@@ -127,11 +130,8 @@ if missing:
 print("verified v0.25.1 V1 CC/MTP patch set")
 PY
 
-ADD --checksum=sha256:dd654b19b81907030ecd3b3229c10282df2a16bdae49f7beaaa423b54a4caec4 \
-    https://raw.githubusercontent.com/tinfoilsh/tinfoil-usage/5d0a81fe9c5345b734b385449563adf02a476b26/tinfoil_usage.py \
-    /opt/tinfoil/tinfoil_usage.py
-ENV PYTHONPATH=/opt/tinfoil
-RUN python3 -B -c "import tinfoil_usage; print('usage metering ready:', tinfoil_usage.TRAILER_SUPPORT)"
+COPY --from=sidecar /inference-sidecar /opt/tinfoil/inference-sidecar
+ENTRYPOINT ["/opt/tinfoil/inference-sidecar", "vllm", "serve"]
 
 LABEL org.opencontainers.image.source="https://github.com/tinfoilsh/confidential-gemma4-31b" \
       org.opencontainers.image.revision="${SOURCE_REVISION}" \
