@@ -14,7 +14,7 @@ models:
 containers:
   - name: "gemma4-31b"
     models: ["gemma-4-31b", "gemma-4-31b-assistant"]
-    image: "ghcr.io/tinfoilsh/confidential-gemma4-31b@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    image: "ghcr.io/tinfoilsh/confidential-gemma4-31b@sha256:4cf9c72243a906ab1f125d32c5e50c0102b0f89c4bed92c7951590d31d4a8fbe" # v0.0.27
     runtime: nvidia
     gpus: all
     memory: 64g
