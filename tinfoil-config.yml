@@ -1,6 +1,6 @@
 cvm-version: 0.14.14
 cpus: 16
-memory: 131072
+memory: 65536
 gpus: 1
 
 models:
