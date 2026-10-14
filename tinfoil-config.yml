@@ -34,7 +34,7 @@ containers:
       "{\"method\":\"mtp\",\"model\":\"/tinfoil/models/gemma-4-31b-assistant\",\"num_speculative_tokens\":4,\"draft_sample_method\":\"probabilistic\",\"rejection_sample_method\":\"standard\"}",
       "--dtype", "bfloat16", "--max-model-len", "262144", "--max-num-batched-tokens", "8192",
       "--long-prefill-token-threshold", "2048", "--seed", "0", "--enable-prefix-caching",
-      "--enable-chunked-prefill", "--async-scheduling",
+      "--enable-chunked-prefill", "--async-scheduling", "--trust-request-mm-kwargs",
       "--port", "8001"]
     tmpfs:
       /tmp: size=512m,mode=1777,exec
