@@ -1,0 +1,232 @@
+--- a/vllm/envs.py
++++ b/vllm/envs.py
+@@ -92,6 +92,7 @@
+     VLLM_MAIN_CUDA_VERSION: str = "13.0"
+     VLLM_FLOAT32_MATMUL_PRECISION: Literal["highest", "high", "medium"] = "highest"
+     VLLM_BATCH_INVARIANT: bool = False
++    VLLM_GEMMA4_FIRST_RMS_R8192: bool = False
+     VLLM_TRITON_USE_TD: bool | None = None
+     VLLM_GPU_SYNC_CHECK: Literal["warn", "error"] | None = None
+     MAX_JOBS: str | None = None
+@@ -631,6 +632,9 @@
+     # Enable batch-invariant mode: deterministic results regardless of
+     # batch composition. Requires NVIDIA GPU with compute capability >= 9.0.
+     "VLLM_BATCH_INVARIANT": lambda: bool(int(os.getenv("VLLM_BATCH_INVARIANT", "0"))),
++    "VLLM_GEMMA4_FIRST_RMS_R8192": lambda: bool(
++        int(os.getenv("VLLM_GEMMA4_FIRST_RMS_R8192", "0"))
++    ),
+     "VLLM_REPLICATE_EMBED": lambda: (
+         os.getenv("VLLM_REPLICATE_EMBED", "0").strip().lower() in ("1", "true")
+     ),
+--- /dev/null
++++ b/vllm/model_executor/layers/gemma4_first_rms.py
+@@ -0,0 +1,177 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""Fixed first-input RMS reduction for the qualified Gemma4 geometry."""
++
++import torch
++
++from vllm import envs, ir
++from vllm.model_executor.layers.layernorm import RMSNorm
++from vllm.platforms import current_platform
++from vllm.triton_utils import tl, triton, tldevice
++from vllm.utils.torch_utils import direct_register_custom_op
++
++HIDDEN_SIZE = 5376
++EPSILON = 1e-6
++MAX_ROWS = 8192
++TARGET_LAYER = 0
++TENSOR_PARALLEL_SIZE = 1
++DEVICE_CAPABILITY = 90
++DEVICE_FAMILY = "H200"
++KERNEL_CONFIG = {"XBLOCK": 1, "R0_BLOCK": 8192}
++LAUNCH_OPTIONS = {
++    "num_warps": 16,
++    "num_stages": 1,
++    "num_ctas": 1,
++    "enable_fp_fusion": True,
++    "enable_reflect_ftz": True,
++    "launch_cooperative_grid": False,
++    "launch_pdl": False,
++    "debug": True,
++    "sanitize_overflow": False,
++}
++
++
++@triton.jit(do_not_specialize=["xnumel"], do_not_specialize_on_alignment=["xnumel"])
++def rms_kernel(
++    in_ptr0,
++    in_ptr1,
++    out_ptr1,
++    xnumel,
++    HIDDEN_SIZE: tl.constexpr,
++    EPSILON: tl.constexpr,
++    XBLOCK: tl.constexpr,
++    R0_BLOCK: tl.constexpr,
++):
++    r0_numel = HIDDEN_SIZE
++    xoffset = tl.program_id(0) * XBLOCK
++    xindex = xoffset + tl.arange(0, XBLOCK)[:, None]
++    xmask = xindex < xnumel
++    r0_base = tl.arange(0, R0_BLOCK)[None, :]
++    x0 = xindex
++    _tmp4 = tl.full([XBLOCK, R0_BLOCK], 0, tl.float32)
++    for r0_offset in tl.range(0, r0_numel, R0_BLOCK):
++        r0_index = r0_offset + r0_base
++        r0_mask = r0_index < r0_numel
++        r0_1 = r0_index
++        tmp0 = tl.load(
++            in_ptr0 + (r0_1 + HIDDEN_SIZE * x0),
++            r0_mask & xmask,
++            eviction_policy="evict_last",
++            other=0.0,
++        ).to(tl.float32)
++        tmp1 = tmp0.to(tl.float32)
++        tmp2 = tmp1 * tmp1
++        tmp3 = tl.broadcast_to(tmp2, [XBLOCK, R0_BLOCK])
++        tmp5 = _tmp4 + tmp3
++        _tmp4 = tl.where(r0_mask & xmask, tmp5, _tmp4)
++    tmp4 = tl.sum(_tmp4, 1)[:, None]
++    for r0_offset in tl.range(0, r0_numel, R0_BLOCK):
++        r0_index = r0_offset + r0_base
++        r0_mask = r0_index < r0_numel
++        r0_1 = r0_index
++        tmp6 = tl.load(
++            in_ptr0 + (r0_1 + HIDDEN_SIZE * x0),
++            r0_mask & xmask,
++            eviction_policy="evict_first",
++            other=0.0,
++        ).to(tl.float32)
++        tmp15 = tl.load(
++            in_ptr1 + r0_1, r0_mask, eviction_policy="evict_last", other=0.0
++        ).to(tl.float32)
++        tmp7 = tmp6.to(tl.float32)
++        tmp8 = tl.full([1, 1], HIDDEN_SIZE, tl.float32)
++        tmp9 = tmp4 / tmp8
++        tmp10 = tl.full([1, 1], EPSILON, tl.float32)
++        tmp11 = tmp9 + tmp10
++        tmp12 = tldevice.rsqrt(tmp11)
++        tmp13 = tmp7 * tmp12
++        tmp14 = tmp13.to(tl.float32)
++        tmp16 = tmp14 * tmp15
++        tl.store(out_ptr1 + (r0_1 + HIDDEN_SIZE * x0), tmp16, r0_mask & xmask)
++
++
++def supports_norm(norm: RMSNorm) -> bool:
++    return (
++        type(norm) is RMSNorm
++        and norm.hidden_size == HIDDEN_SIZE
++        and norm.variance_epsilon == EPSILON
++        and norm.variance_size_override is None
++        and norm.has_weight
++        and norm.pass_weight
++        and getattr(norm._forward_method, "__func__", None)
++        in (RMSNorm.forward_cuda, RMSNorm.forward_native)
++        and not envs.VLLM_BATCH_INVARIANT
++        and ir.ops.rms_norm.get_priority() in ([], ["native"])
++    )
++
++
++def enabled(norm: RMSNorm, layer_index: int, tp_size: int) -> bool:
++    return (
++        envs.VLLM_GEMMA4_FIRST_RMS_R8192
++        and layer_index == TARGET_LAYER
++        and tp_size == TENSOR_PARALLEL_SIZE
++        and supports_norm(norm)
++        and norm.weight.device.type == "cuda"
++        and norm.weight.dtype == torch.bfloat16
++        and current_platform.is_cuda()
++        and current_platform.is_device_capability(
++            DEVICE_CAPABILITY, device_id=norm.weight.device.index
++        )
++        and DEVICE_FAMILY in current_platform.get_device_name(norm.weight.device.index)
++    )
++
++
++def supports_input(x: torch.Tensor, weight: torch.Tensor) -> bool:
++    return (
++        x.device.type == "cuda"
++        and x.device == weight.device
++        and x.dtype == weight.dtype == torch.bfloat16
++        and x.ndim == 2
++        and weight.ndim == 1
++        and x.shape[1] == weight.shape[0] == HIDDEN_SIZE
++        and 0 <= x.shape[0] <= MAX_ROWS
++        and x.is_contiguous()
++        and weight.is_contiguous()
++    )
++
++
++def native(x: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
++    return ir.ops.rms_norm(x, weight, EPSILON, None)
++
++
++def fixed_rms(x: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
++    if not supports_input(x, weight):
++        return native(x, weight)
++    output = torch.empty_like(x)
++    if x.shape[0] == 0:
++        return output
++    rms_kernel[(x.shape[0],)](
++        x,
++        weight,
++        output,
++        x.shape[0],
++        HIDDEN_SIZE=HIDDEN_SIZE,
++        EPSILON=EPSILON,
++        **KERNEL_CONFIG,
++        **LAUNCH_OPTIONS,
++    )
++    return output
++
++
++def fake(x: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
++    return torch.empty_like(x)
++
++
++direct_register_custom_op(
++    "gemma4_first_rms_r8192",
++    fixed_rms,
++    mutates_args=[],
++    fake_impl=fake,
++    dispatch_key="CUDA",
++)
++
++
++def apply(norm: RMSNorm, x: torch.Tensor) -> torch.Tensor:
++    if supports_norm(norm) and supports_input(x, norm.weight):
++        return torch.ops.vllm.gemma4_first_rms_r8192(x, norm.weight.data)
++    return norm(x)
+--- a/vllm/model_executor/models/gemma4.py
++++ b/vllm/model_executor/models/gemma4.py
+@@ -42,6 +42,7 @@
+     GateLinear,
+     MoERunner,
+ )
++from vllm.model_executor.layers import gemma4_first_rms
+ from vllm.model_executor.layers.layernorm import RMSNorm
+ from vllm.model_executor.layers.linear import (
+     ColumnParallelLinear,
+@@ -617,6 +618,9 @@
+ 
+         # Layer norms: output = norm(x) * weight
+         self.input_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
++        self.use_fixed_first_rms = gemma4_first_rms.enabled(
++            self.input_layernorm, self.layer_idx, get_tensor_model_parallel_world_size()
++        )
+         self.post_attention_layernorm = RMSNorm(
+             config.hidden_size, eps=config.rms_norm_eps
+         )
+@@ -724,7 +728,10 @@
+         # 2. pre_ff_norm → mlp → post_ff_norm → ADD residual
+         residual = hidden_states
+ 
+-        hidden_states = self.input_layernorm(residual)
++        if self.use_fixed_first_rms:
++            hidden_states = gemma4_first_rms.apply(self.input_layernorm, residual)
++        else:
++            hidden_states = self.input_layernorm(residual)
+ 
+         hidden_states = self.self_attn(
+             positions=positions,

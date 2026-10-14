@@ -1,53 +1,18 @@
-# vLLM v0.25.1 Deployment Patches
+# vLLM v0.31.0 deployment patches
 
-These 19 patches apply in filename order to the official vLLM v0.25.1
-Python package. They were generated from
-`tinfoilsh/vllm-cc-opt:milestone/gemma4-cc-v0251-v1-perf-b300-20260722` at
-commit `f7ccdd0596cb6899bc0b32a1ca581d9f67250db7`.
+Apply these patches in filename order to upstream commit
+`db9527a46873454610df6dbedf79a36d6bf1a7f6`:
 
-## Included
+- `0001`: explicit-copy fallback when CC prevents a live host/device alias.
+- `0002`: reject public structured-output regex constraints.
+- `0003`: repetition defaults for grammar-constrained output, preserving opt-out.
+- `0004`: bounded first-layer RMS policy for BF16 Gemma on H200.
 
-- `0101` allows this public deployment to reject user-provided regex
-  constraints. The upstream compilation timeout remains in place.
-- `0102` centralizes the pageable-host-staging policy at v0.25.1's global
-  `PIN_MEMORY` hook. `VLLM_CC_PAGEABLE_H2D=1` avoids pinned staging in full CC.
-- `0103` enables vLLM's repetition detector for grammar-constrained Gemma
-  output while preserving an explicit all-zero caller opt-out.
-- `0104` is upstream commit `b2b8f679d` (merged after v0.25.1). It restores
-  target-width input embeddings for MTP drafts while retaining the EAGLE width
-  guard. Without it, Gemma 4 MTP fails initialization with a 6400 x 10752
-  projection mismatch.
-- `0105`-`0111` remove avoidable V1 token-history and metadata copies and add
-  a CC-gated asynchronous output publication path, including MTP acceptance
-  counts.
-- `0112`-`0116` add the uniform MTP metadata and dirty block-table kernels plus
-  the stale-state and overlapping-update correctness repairs found during the
-  original B300 validation.
-- `0117` validates CC fast-path token domains and packed block-table metadata
-  before it reaches the GPU kernels.
-- `0118` registers the deployment gates with vLLM's environment validator;
-  this removes misleading unknown-variable warnings without changing behavior.
-- `0119` initializes the v0.25.1 runner's host-staging policy for the ported
-  output and metadata paths. It fixes the missing `pin_memory` attribute found
-  by the first full-CC endpoint request.
+MRV2 replaces the V1 metadata, block-table, and output-publication patch stack.
+The RMS policy preserves the selected reduction behavior; it does not imply
+an independently measured speedup or general numerical equivalence.
 
-## Removed From v0.23.0
-
-The v0.23.0 Gemma streaming parser patch and three security backports are not
-carried forward because v0.25.1 contains their replacements or upstream fixes.
-
-The V2 runner has native equivalents for much of this stack, but it is not
-enabled: stock v0.25.1 produced incorrect Gemma 4 output in full-CC B300 tests,
-including eager no-MTP controls. The candidate therefore uses V1 and preserves
-the repaired V1 CC fast paths.
-
-## Verification
-
-Run:
-
-```bash
-validation/verify_patch_series.sh /path/to/vllm-checkout
-```
-
-The script checks out v0.25.1, applies all 19 patches with zero fuzz, and
-diffs the result against the source branch commit above.
+`series.sha256`, `upstream.sha256`, and `runtime.sha256` verify patch bytes and
+source files before and after application. Both the Docker build and
+`validation/verify_patch_series.sh /path/to/vllm-checkout` enforce these hashes
+and apply patches with zero fuzz.

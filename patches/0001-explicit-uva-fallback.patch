@@ -1,0 +1,58 @@
+--- a/vllm/envs.py
++++ b/vllm/envs.py
+@@ -308,6 +308,7 @@
+     VLLM_DEBUG_MFU_METRICS: bool = False
+     VLLM_WEIGHT_OFFLOADING_DISABLE_PIN_MEMORY: bool = False
+     VLLM_WEIGHT_OFFLOADING_DISABLE_UVA: bool = False
++    VLLM_DISABLE_UVA: bool = False
+     VLLM_KV_OFFLOAD_MAX_BATCH_DESCRIPTORS: int = 0
+     VLLM_WSL2_ENABLE_PIN_MEMORY: bool = False
+     VLLM_DISABLE_LOG_LOGO: bool = False
+@@ -2110,6 +2111,8 @@
+     "VLLM_WEIGHT_OFFLOADING_DISABLE_UVA": lambda: bool(
+         int(os.getenv("VLLM_WEIGHT_OFFLOADING_DISABLE_UVA", "0"))
+     ),
++    # Use explicit copies when host memory does not provide a live device alias.
++    "VLLM_DISABLE_UVA": lambda: bool(int(os.getenv("VLLM_DISABLE_UVA", "0"))),
+     # Max descriptors per CPU-KV-offload batch-memcpy call. 0 = platform default
+     # (ROCm chunks at 8192, since hipMemcpyBatchAsync faults above that on
+     # rocm 7.14/7.15 when batch copy is optimized; CUDA uncapped). Set >0 to override.
+--- a/vllm/utils/platform_utils.py
++++ b/vllm/utils/platform_utils.py
+@@ -9,6 +9,8 @@
+ 
+ import regex as re
+ import torch
++
++import vllm.envs as envs
+ 
+ 
+ def cuda_is_initialized() -> bool:
+@@ -50,6 +52,9 @@
+ @cache
+ def is_uva_available() -> bool:
+     """Check if Unified Virtual Addressing (UVA) is available."""
++    if envs.VLLM_DISABLE_UVA:
++        return False
++
+     # UVA requires pinned memory.
+     from vllm.platforms import current_platform
+ 
+--- a/vllm/v1/worker/gpu/buffer_utils.py
++++ b/vllm/v1/worker/gpu/buffer_utils.py
+@@ -39,13 +39,13 @@
+ 
+ 
+ class NonUvaBuffer:
+-    """Explicit-copy fallback for platforms without pinned memory."""
++    """Explicit-copy fallback when a live host/device alias is unavailable."""
+ 
+     def __init__(self, size: int | Sequence[int], dtype: torch.dtype):
+         from vllm.platforms import current_platform
+ 
+         logger.warning_once(
+-            "Pinned memory is not available on this platform; falling back "
++            "UVA is unavailable or disabled; falling back "
+             "to device memory for UVA buffers."
+         )
+         self.cpu = torch.zeros(size, dtype=dtype, device="cpu")

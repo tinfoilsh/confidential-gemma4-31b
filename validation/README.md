@@ -1,8 +1,9 @@
 # Validation
 
-`verify_patch_series.sh` applies the deployment patches to exact vLLM v0.25.1
-and compares the runtime package to source commit
-`f7ccdd0596cb6899bc0b32a1ca581d9f67250db7`.
+`verify_patch_series.sh` applies the deployment patches to exact vLLM v0.31.0
+and verifies the selected runtime's source hashes. The Docker build runs the
+existing UVA fallback and Gemma request-policy CPU tests; CUDA cases are skipped
+when no GPU is available.
 
 `validate_stock_candidate_cc.py` runs the deterministic seven-case API suite
 against stock and candidate endpoints. Run it inside the benchmark environment
@@ -16,9 +17,9 @@ runner for one-GPU sequential stock/candidate validation.
 the cases across concurrent workers. It checks the absolute expectations and
 equality with the oracle while request slots are reused.
 
-`test_block_table_coalescing.py` runs a randomized property test against the
-installed candidate runtime. It verifies that coalesced destinations are
-disjoint and reproduce the final authoritative CPU block table.
+`test_block_table_coalescing.py` is retained for the v0.25.1 rollback runtime.
+It verifies that coalesced destinations are disjoint and reproduce the final
+authoritative CPU block table.
 
 `validate_security_endpoint.py` exercises the public-input trust boundary. It
 expects regex constraints, remote and local-file media, video, and negative

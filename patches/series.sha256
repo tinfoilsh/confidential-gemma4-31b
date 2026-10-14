@@ -1,0 +1,4 @@
+000f193af3a0fecda8b146824a1d747b70c12019de0bf78cb0f512accdda6086  0001-explicit-uva-fallback.patch
+8127fb94c02a6702b4dd542347e1c88ade6d8d7addea45db6e99d56c64c5b6cf  0002-preserve-regex-policy.patch
+39f8c847ac8bcb2b7d6423e9c3cad4884222ce4a40ea4c8872dadcdcfa560f94  0003-preserve-gemma-repetition-policy.patch
+9441fb6e8c2769acf4ec6f2bc2a4813e403ede8caec3a55a5926460eb677b2ab  0004-gemma-first-rms-r8192.patch
