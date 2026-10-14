@@ -3,29 +3,12 @@
 Tinfoil confidential enclave configuration for
 [`google/gemma-4-31B-it`](https://huggingface.co/google/gemma-4-31B-it).
 
-This branch ports the confidential-computing and MTP optimization stack to
-vLLM v0.25.1. The candidate has completed full-CC correctness, API, stress,
-and performance validation on an NVIDIA B300; [HANDOFF.md](HANDOFF.md) records
-the immutable identities, results, and release procedure.
+The vLLM v0.31.0 candidate uses MRV2, FlashAttention, and four MTP proposals
+with probabilistic drafting. Its scheduler keeps an 8192-token batch budget
+and a 2048-token prefill threshold to limit interference with decoding.
 
-## Repo layout
-
-```
-confidential-gemma4-31b/
-├── Dockerfile                 builds on the digest-pinned vLLM v0.25.1 base
-├── HANDOFF.md                 candidate status and required validation
-├── patches/                   ordered deployment patch series
-│   ├── 0101-0104-...          minimal CC, correctness, and upstream MTP fixes
-│   ├── 0105-0119-...          V1 CC/MTP performance and safety fixes
-│   └── README.md              provenance and regeneration instructions
-├── validation/                API and source-level verification tools
-├── tinfoil-config.yml         enclave configuration
-└── .github/workflows/
-    ├── tinfoil-release.yml    review image and release build
-    └── tinfoil-release-publish.yml
-                               release measurement and publication
-```
-
-The authoritative implementation is
-`tinfoilsh/vllm-cc-opt:milestone/gemma4-cc-v0251-v1-perf-b300-20260722`.
-Experiment evidence is in the private `tinfoilsh/vllm-cc-gemma4-lab` repo.
+- [tinfoil-config.yml](tinfoil-config.yml): model, runtime, and enclave settings.
+- [Dockerfile](Dockerfile): digest-pinned build with the inference sidecar.
+- [patches/README.md](patches/README.md): runtime patches and source verification.
+- [HANDOFF.md](HANDOFF.md): packaging and release status.
+- [validation/README.md](validation/README.md): existing validation tools.

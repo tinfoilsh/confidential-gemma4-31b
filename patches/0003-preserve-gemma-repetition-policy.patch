@@ -1,32 +1,31 @@
-From 1fe696063298233e75a60728db50ff4c8e4c734c Mon Sep 17 00:00:00 2001
-From: Jules Drean <jules@tinfoil.sh>
-Date: Wed, 22 Jul 2026 19:14:02 +0000
-Subject: [PATCH 3/3] fix: guard grammar-constrained Gemma repetition
-
----
- vllm/sampling_params.py | 25 +++++++++++++++++++++++++
- 1 file changed, 25 insertions(+)
-
-diff --git a/vllm/sampling_params.py b/vllm/sampling_params.py
-index a1a529119..91d144bb9 100644
 --- a/vllm/sampling_params.py
 +++ b/vllm/sampling_params.py
-@@ -141,6 +141,14 @@ class StructuredOutputsParams:
-             )
-         )
+@@ -26,6 +26,9 @@
  
+ _SAMPLING_EPS = 1e-5
+ _MAX_TEMP = 1e-2
++_GRAMMAR_REPETITION_MAX_PATTERN_SIZE = 20
++_GRAMMAR_REPETITION_MIN_PATTERN_SIZE = 3
++_GRAMMAR_REPETITION_MIN_COUNT = 4
+ 
+ MAX_LOGPROB_TOKEN_IDS = 128
+ """Upper bound on `SamplingParams.logprob_token_ids` list length. Must match
+@@ -151,6 +154,14 @@
+                 "grammar",
+                 "json_object",
+             )
++        )
++
 +    def uses_grammar_constraint(self) -> bool:
 +        """Whether this constraint applies a grammar token mask."""
 +        return (
 +            self.json is not None
 +            or bool(self.json_object)
 +            or self.grammar is not None
-+        )
-+
+         )
  
- @dataclass
- class RepetitionDetectionParams:
-@@ -497,6 +505,23 @@ class SamplingParams(
+ 
+@@ -556,6 +567,23 @@
          # eos_token_id is added to this by the engine
          self._all_stop_token_ids.update(self.stop_token_ids)
  
@@ -38,9 +37,9 @@ index a1a529119..91d144bb9 100644
 +            and self.structured_outputs.uses_grammar_constraint()
 +        ):
 +            self.repetition_detection = RepetitionDetectionParams(
-+                max_pattern_size=20,
-+                min_pattern_size=3,
-+                min_count=4,
++                max_pattern_size=_GRAMMAR_REPETITION_MAX_PATTERN_SIZE,
++                min_pattern_size=_GRAMMAR_REPETITION_MIN_PATTERN_SIZE,
++                min_count=_GRAMMAR_REPETITION_MIN_COUNT,
 +            )
 +            logger.info_once(
 +                "Auto-enabled repetition detection for grammar-constrained "
@@ -50,6 +49,3 @@ index a1a529119..91d144bb9 100644
          if self.skip_reading_prefix_cache is None:
              # If prefix caching is enabled,
              # the output of prompt logprobs may less than n_prompt_tokens,
--- 
-2.43.0
-

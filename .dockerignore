@@ -1,0 +1,8 @@
+*
+!Dockerfile
+!patches/
+!patches/**
+!validation/
+!validation/test-requirements.txt
+!validation/test_gemma_policy.py
+!validation/test_uva.py

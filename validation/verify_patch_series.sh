@@ -8,23 +8,19 @@ fi
 
 source_checkout=$1
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+upstream_revision=db9527a46873454610df6dbedf79a36d6bf1a7f6
 temporary_root=$(mktemp -d)
 trap 'rm -rf "$temporary_root"' EXIT
 
-git clone --shared "$source_checkout" "$temporary_root/patched"
-git clone --shared "$source_checkout" "$temporary_root/expected"
-git -C "$temporary_root/patched" checkout --detach v0.25.1
-git -C "$temporary_root/expected" checkout --detach \
-  f7ccdd0596cb6899bc0b32a1ca581d9f67250db7
-
+git -C "$source_checkout" archive "$upstream_revision" vllm | tar -x -C "$temporary_root"
+(
+  cd "$repo_root/patches"
+  sha256sum --check series.sha256
+)
+cd "$temporary_root"
+sha256sum --check "$repo_root/patches/upstream.sha256"
 for patch_file in "$repo_root"/patches/*.patch; do
-  patch -d "$temporary_root/patched" -p1 --no-backup-if-mismatch --fuzz=0 \
-    < "$patch_file"
+  patch --batch --forward -p1 --no-backup-if-mismatch --fuzz=0 < "$patch_file"
 done
-
-diff -ru "$temporary_root/expected/vllm" "$temporary_root/patched/vllm"
-
-grep -q 'uses_grammar_constraint' \
-  "$temporary_root/patched/vllm/sampling_params.py"
-
-echo "deployment patch series matches the v0.25.1 V1 CC/MTP candidate"
+sha256sum --check "$repo_root/patches/runtime.sha256"
+echo "deployment patch series matches the selected v0.31.0 runtime sources"
