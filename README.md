@@ -10,5 +10,4 @@ and a 2048-token prefill threshold to limit interference with decoding.
 - [tinfoil-config.yml](tinfoil-config.yml): model, runtime, and enclave settings.
 - [Dockerfile](Dockerfile): digest-pinned build with the inference sidecar.
 - [patches/README.md](patches/README.md): runtime patches and source verification.
-- [HANDOFF.md](HANDOFF.md): packaging and release status.
 - [validation/README.md](validation/README.md): existing validation tools.
