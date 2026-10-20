@@ -29,5 +29,4 @@ streams; and verifies health and canary isolation afterward.
 `validate_responses_endpoint.py` covers streamed text, forced and parallel
 streamed tools, function-result continuation, and streamed inline-image input.
 
-Correctness results must be preserved in `vllm-cc-gemma4-lab`, not committed
-to this deployment repository.
+Do not commit correctness results to this deployment repository.
