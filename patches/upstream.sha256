@@ -3,3 +3,5 @@
 3c37c655a0a60851e3d96d946eb10d1cbb347dee6cd143f38a7fc18c6f66dd8b  vllm/sampling_params.py
 9501968a99185c29094610e252d00569afae20e59313c8e2e197e07370500aef  vllm/utils/platform_utils.py
 6597f701a30261bf250e9ad5a29737264624a1caa20527aeea0dad630325b093  vllm/v1/worker/gpu/buffer_utils.py
+0f9df8b0153bd0a2720ee957f6cd1600b9d865eb12b7bf432501ffaa12fb6a9c  vllm/v1/worker/gpu/attn_utils.py
+f1d34d5c8c03be6e5afec8c2a24480ec259ca7c87392462f4e52d6c4eb775733  vllm/v1/worker/gpu/model_states/default.py

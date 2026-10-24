@@ -9,6 +9,10 @@ when no GPU is available.
 and user follow-ups. Set `GEMMA_CHAT_TEMPLATE` to a patched template path when
 running it outside the container; the Docker build tests the deployed template.
 
+`test_gemma_mm_prefix.py` checks that large image-attention ranges survive on
+models that clamp them inside the kernel, while preserving the size limit for
+other models. It runs in the Docker build with the patched runtime.
+
 `validate_stock_candidate_cc.py` runs the deterministic seven-case API suite
 against stock and candidate endpoints. Run it inside the benchmark environment
 where both endpoints are available; see `--help` for arguments.
