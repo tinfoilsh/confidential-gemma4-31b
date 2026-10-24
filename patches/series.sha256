@@ -2,3 +2,4 @@
 8127fb94c02a6702b4dd542347e1c88ade6d8d7addea45db6e99d56c64c5b6cf  0002-preserve-regex-policy.patch
 39f8c847ac8bcb2b7d6423e9c3cad4884222ce4a40ea4c8872dadcdcfa560f94  0003-preserve-gemma-repetition-policy.patch
 9441fb6e8c2769acf4ec6f2bc2a4813e403ede8caec3a55a5926460eb677b2ab  0004-gemma-first-rms-r8192.patch
+b2c20462a2138fbe61a9e12f6bfba49e05ebbae04f8b59e884f5258268886c4e  templates/0005-gemma-tool-answer-prefix.patch

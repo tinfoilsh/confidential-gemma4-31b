@@ -5,6 +5,10 @@ and verifies the selected runtime's source hashes. The Docker build runs the
 existing UVA fallback and Gemma request-policy CPU tests; CUDA cases are skipped
 when no GPU is available.
 
+`test_gemma_template.py` checks tool-result answer boundaries, thinking modes,
+and user follow-ups. Set `GEMMA_CHAT_TEMPLATE` to a patched template path when
+running it outside the container; the Docker build tests the deployed template.
+
 `validate_stock_candidate_cc.py` runs the deterministic seven-case API suite
 against stock and candidate endpoints. Run it inside the benchmark environment
 where both endpoints are available; see `--help` for arguments.
