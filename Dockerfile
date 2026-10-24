@@ -39,12 +39,12 @@ assert importlib.util.find_spec("cv2") is None
 assert importlib.util.find_spec("mooncake") is None
 PY
 
-COPY validation/test-requirements.txt validation/test_gemma_policy.py validation/test_uva.py /opt/tinfoil-tests/
+COPY validation/test-requirements.txt validation/test_gemma_policy.py validation/test_uva.py validation/test_gemma_mm_prefix.py /opt/tinfoil-tests/
 RUN uv venv --system-site-packages --python /usr/bin/python3.12 /opt/tinfoil-tests/.venv && \
     env -u UV_OVERRIDE uv pip install --python /opt/tinfoil-tests/.venv/bin/python --require-hashes \
       -r /opt/tinfoil-tests/test-requirements.txt && \
     /opt/tinfoil-tests/.venv/bin/python -m pytest --noconftest -q \
-      /opt/tinfoil-tests/test_gemma_policy.py /opt/tinfoil-tests/test_uva.py && \
+      /opt/tinfoil-tests/test_gemma_policy.py /opt/tinfoil-tests/test_uva.py /opt/tinfoil-tests/test_gemma_mm_prefix.py && \
     rm -rf /opt/tinfoil-tests /opt/uv/cache
 
 COPY --from=sidecar /inference-sidecar /opt/tinfoil/inference-sidecar

@@ -5,6 +5,10 @@ and verifies the selected runtime's source hashes. The Docker build runs the
 existing UVA fallback and Gemma request-policy CPU tests; CUDA cases are skipped
 when no GPU is available.
 
+`test_gemma_mm_prefix.py` checks that large image-attention ranges survive on
+models that clamp them inside the kernel, while preserving the size limit for
+other models. It runs in the Docker build with the patched runtime.
+
 `validate_stock_candidate_cc.py` runs the deterministic seven-case API suite
 against stock and candidate endpoints. Run it inside the benchmark environment
 where both endpoints are available; see `--help` for arguments.
