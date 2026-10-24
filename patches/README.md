@@ -9,6 +9,11 @@ Apply these patches in filename order to upstream commit
 - `0004`: bounded first-layer RMS policy for BF16 Gemma on H200.
 - `0005`: preserve large image attention ranges when the model clamps them in-kernel.
 
+The image-range fix addresses the V2 gap documented in
+[vLLM #50539](https://github.com/vllm-project/vllm/pull/50539), matching V1's
+model/config capability check. It preserves the default size limit for models
+that do not clamp bidirectional image attention inside the kernel.
+
 MRV2 replaces the V1 metadata, block-table, and output-publication patch stack.
 The RMS policy preserves the selected reduction behavior; it does not imply
 an independently measured speedup or general numerical equivalence.
