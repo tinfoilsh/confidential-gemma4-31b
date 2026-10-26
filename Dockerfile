@@ -25,6 +25,10 @@ RUN set -eux; \
         patch --batch --forward -p1 --no-backup-if-mismatch --fuzz=0 < "$patch_file"; \
     done; \
     sha256sum --check /tmp/tinfoil-patches/runtime.sha256; \
+    cd /vllm-workspace; \
+    sha256sum --check /tmp/tinfoil-patches/templates/upstream.sha256; \
+    patch --batch --forward -p1 --no-backup-if-mismatch --fuzz=0 < /tmp/tinfoil-patches/templates/0005-gemma-tool-answer-prefix.patch; \
+    sha256sum --check /tmp/tinfoil-patches/templates/runtime.sha256; \
     find "$VLLM_PACKAGE_ROOT" -name '__pycache__' -type d -exec rm -rf {} +; \
     rm -rf /tmp/tinfoil-patches
 
@@ -39,12 +43,12 @@ assert importlib.util.find_spec("cv2") is None
 assert importlib.util.find_spec("mooncake") is None
 PY
 
-COPY validation/test-requirements.txt validation/test_gemma_policy.py validation/test_uva.py /opt/tinfoil-tests/
+COPY validation/test-requirements.txt validation/test_gemma_policy.py validation/test_uva.py validation/test_gemma_template.py validation/test_gemma_mm_prefix.py /opt/tinfoil-tests/
 RUN uv venv --system-site-packages --python /usr/bin/python3.12 /opt/tinfoil-tests/.venv && \
     env -u UV_OVERRIDE uv pip install --python /opt/tinfoil-tests/.venv/bin/python --require-hashes \
       -r /opt/tinfoil-tests/test-requirements.txt && \
     /opt/tinfoil-tests/.venv/bin/python -m pytest --noconftest -q \
-      /opt/tinfoil-tests/test_gemma_policy.py /opt/tinfoil-tests/test_uva.py && \
+      /opt/tinfoil-tests/test_gemma_policy.py /opt/tinfoil-tests/test_uva.py /opt/tinfoil-tests/test_gemma_template.py /opt/tinfoil-tests/test_gemma_mm_prefix.py && \
     rm -rf /opt/tinfoil-tests /opt/uv/cache
 
 COPY --from=sidecar /inference-sidecar /opt/tinfoil/inference-sidecar

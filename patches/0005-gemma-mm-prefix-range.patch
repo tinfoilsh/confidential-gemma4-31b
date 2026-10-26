@@ -1,0 +1,48 @@
+--- a/vllm/v1/worker/gpu/attn_utils.py
++++ b/vllm/v1/worker/gpu/attn_utils.py
+@@ -559,11 +559,14 @@
+     req_ids: list[str],
+     mm_features: dict[str, list[MultiModalFeatureSpec]],
+     sliding_window: int | None = None,
++    *,
++    clamp_in_kernel: bool = False,
+ ) -> dict[int, list[tuple[int, int]]]:
+     """Compute PrefixLM bidirectional ranges for multimodal tokens.
+ 
+     Ranges exceeding sliding_window are skipped to prevent early tokens
+-    from attending across the entire image span.
++    from attending across the entire image span, unless the model clamps
++    bidirectional attention to the window inside its attention kernel.
+     """
+     req_doc_ranges: dict[int, list[tuple[int, int]]] = {}
+     for req_idx, req_id in enumerate(req_ids):
+@@ -572,7 +575,11 @@
+             if mm_feature.modality not in ("image", "video"):
+                 continue
+             for r in mm_feature.mm_position.extract_embeds_range():
+-                if sliding_window is not None and (r[1] - r[0] + 1) > sliding_window:
++                if (
++                    not clamp_in_kernel
++                    and sliding_window is not None
++                    and (r[1] - r[0] + 1) > sliding_window
++                ):
+                     continue
+                 image_doc_ranges.append(r)
+         req_doc_ranges[req_idx] = image_doc_ranges
+--- a/vllm/v1/worker/gpu/model_states/default.py
++++ b/vllm/v1/worker/gpu/model_states/default.py
+@@ -209,6 +209,14 @@
+                 req_ids=input_batch.req_ids,
+                 mm_features=self.encoder_cache.mm_features,
+                 sliding_window=self.model_config.get_sliding_window(),
++                clamp_in_kernel=(
++                    getattr(self.model, "mm_prefix_clamp_sliding_window", False)
++                    or getattr(
++                        self.model_config.hf_text_config,
++                        "mm_prefix_clamp_sliding_window",
++                        False,
++                    )
++                ),
+             )
+         attn_metadata = build_attn_metadata(
+             attn_groups=attn_groups,
