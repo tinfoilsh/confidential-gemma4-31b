@@ -9,6 +9,7 @@ Apply these patches in filename order to upstream commit
 - `0004`: bounded first-layer RMS policy for BF16 Gemma on H200.
 - `templates/0005`: explicit non-thinking answer prefix after tool results.
 - `0005`: preserve large image attention ranges when the model clamps them in-kernel.
+- `0006`: keep Blackwell speculative decode on Triton graphs and causal prefill on FlashInfer.
 
 The image-range fix addresses the V2 gap documented in
 [vLLM #50539](https://github.com/vllm-project/vllm/pull/50539), matching V1's

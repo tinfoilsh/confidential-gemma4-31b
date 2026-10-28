@@ -26,9 +26,9 @@ def test_b200_uses_vllm_backend_selection():
     ]
 
 
-def test_b300_uses_triton_attention():
+def test_b300_uses_composite_attention():
     assert serving_command(MODEL_ARGUMENTS, B300_CAPABILITY) == [
-        *BASE_COMMAND, *MODEL_ARGUMENTS, "--attention-backend", "TRITON_ATTN"
+        *BASE_COMMAND, *MODEL_ARGUMENTS, "--attention-backend", "TRITON_FLASHINFER"
     ]
 
 
@@ -42,7 +42,7 @@ def test_explicit_backend_is_preserved(capability, backend):
 @pytest.mark.parametrize("capability,count,backend", [
     (HOPPER_CAPABILITY, "4", ["--attention-backend", "FLASH_ATTN"]),
     (B200_CAPABILITY, "4", []),
-    (B300_CAPABILITY, "6", ["--attention-backend", "TRITON_ATTN"]),
+    (B300_CAPABILITY, "6", ["--attention-backend", "TRITON_FLASHINFER"]),
 ])
 def test_mtp_budget_defaults_for_each_gpu(capability, count, backend):
     arguments = [*MODEL_ARGUMENTS, "--speculative-config", json.dumps(MTP_CONFIG)]
@@ -58,7 +58,7 @@ def test_explicit_json_proposal_count_is_preserved(flag, key):
     option = [flag + config] if flag.endswith("=") else [flag, config]
     arguments = [*MODEL_ARGUMENTS, *option]
     assert serving_command(arguments, B300_CAPABILITY) == [
-        *BASE_COMMAND, *arguments, "--attention-backend", "TRITON_ATTN"
+        *BASE_COMMAND, *arguments, "--attention-backend", "TRITON_FLASHINFER"
     ]
 
 
@@ -66,14 +66,14 @@ def test_explicit_json_proposal_count_is_preserved(flag, key):
 def test_explicit_scalar_proposal_count_is_preserved(option):
     arguments = [*MODEL_ARGUMENTS, "--speculative-config", json.dumps(MTP_CONFIG), *option]
     assert serving_command(arguments, B300_CAPABILITY) == [
-        *BASE_COMMAND, *arguments, "--attention-backend", "TRITON_ATTN"
+        *BASE_COMMAND, *arguments, "--attention-backend", "TRITON_FLASHINFER"
     ]
 
 
 def test_other_speculation_methods_keep_their_defaults():
     arguments = [*MODEL_ARGUMENTS, "--speculative-config", '{"method":"ngram"}']
     assert serving_command(arguments, B300_CAPABILITY) == [
-        *BASE_COMMAND, *arguments, "--attention-backend", "TRITON_ATTN"
+        *BASE_COMMAND, *arguments, "--attention-backend", "TRITON_FLASHINFER"
     ]
 
 
@@ -81,5 +81,5 @@ def test_dotted_speculation_options_are_passed_through():
     arguments = [*MODEL_ARGUMENTS, "--speculative-config", json.dumps(MTP_CONFIG),
                  "--speculative-config.num_speculative_tokens=2"]
     assert serving_command(arguments, B300_CAPABILITY) == [
-        *BASE_COMMAND, *arguments, "--attention-backend", "TRITON_ATTN"
+        *BASE_COMMAND, *arguments, "--attention-backend", "TRITON_FLASHINFER"
     ]

@@ -1,0 +1,44 @@
+--- a/vllm/v1/attention/backends/triton_flashinfer.py
++++ b/vllm/v1/attention/backends/triton_flashinfer.py
+@@ -2,6 +2,7 @@
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+ """Triton image-mask and FlashInfer causal attention composite."""
+ 
++from vllm.v1.attention.backend import AttentionCGSupport, max_decode_query_len
+ from vllm.v1.attention.backends.composite import (
+     MMPrefixAttentionRouting,
+     create_composite_attention_backend,
+@@ -9,13 +10,32 @@
+ from vllm.v1.attention.backends.flashinfer import FlashInferBackend
+ from vllm.v1.attention.backends.triton_attn import TritonAttentionBackend
+ 
++
++class TritonDecodeRouting(MMPrefixAttentionRouting):
++    capture_variant = 0
++
++    def __init__(self, layer_names, vllm_config):
++        super().__init__(layer_names, vllm_config)
++        self.decode_query_len = max_decode_query_len(vllm_config)
++
++    def select(self, metadata):
++        # Short prefills and shortened drafts share the capture child too.
++        if metadata.max_query_len <= self.decode_query_len:
++            return self.capture_variant
++        return super().select(metadata)
++
++    @staticmethod
++    def get_cudagraph_support(vllm_config, kv_cache_spec):
++        return AttentionCGSupport.UNIFORM_BATCH
++
++
+ TritonFlashInferBackend = create_composite_attention_backend(
+     TritonAttentionBackend,
+     FlashInferBackend,
+     name="TritonFlashInferBackend",
+     backend_name="TRITON_FLASHINFER",
+     module=__name__,
+-    routing_policy=MMPrefixAttentionRouting,
++    routing_policy=TritonDecodeRouting,
+     head_sizes=(256, 512),
+     kernel_block_sizes=(64,),
+     device_major=10,

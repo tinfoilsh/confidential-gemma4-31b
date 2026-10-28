@@ -5,3 +5,4 @@
 6597f701a30261bf250e9ad5a29737264624a1caa20527aeea0dad630325b093  vllm/v1/worker/gpu/buffer_utils.py
 0f9df8b0153bd0a2720ee957f6cd1600b9d865eb12b7bf432501ffaa12fb6a9c  vllm/v1/worker/gpu/attn_utils.py
 f1d34d5c8c03be6e5afec8c2a24480ec259ca7c87392462f4e52d6c4eb775733  vllm/v1/worker/gpu/model_states/default.py
+48d5f967e388d4e8d6bbec8d827b44d855346bc2fada28adf65768bf6623527b  vllm/v1/attention/backends/triton_flashinfer.py
