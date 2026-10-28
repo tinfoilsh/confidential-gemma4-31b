@@ -3,7 +3,7 @@
 Tinfoil confidential enclave configuration for
 [`google/gemma-4-31B-it`](https://huggingface.co/google/gemma-4-31B-it).
 
-The vLLM v0.31.0 candidate uses MRV2, FlashAttention, and four MTP proposals
+The vLLM v0.31.0 candidate uses MRV2, GPU-specific attention, and four MTP proposals
 with probabilistic drafting. Its scheduler keeps an 8192-token batch budget
 and a 2048-token prefill threshold to limit interference with decoding.
 
