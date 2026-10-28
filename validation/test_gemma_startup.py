@@ -46,6 +46,7 @@ def test_explicit_backend_is_preserved(capability, backend):
     ["--attention-config={\"backend\":null}"],
     ["-ac", '{"backend":"TRITON_ATTN"}'],
     ["--attention-config.backend=TRITON_ATTN"],
+    ["-ac.backend=TRITON_ATTN"],
 ])
 def test_explicit_attention_configuration_is_preserved(capability, option):
     arguments = [*MODEL_ARGUMENTS, *option]
@@ -97,9 +98,10 @@ def test_other_speculation_methods_keep_their_defaults():
     ]
 
 
-def test_dotted_speculation_options_are_passed_through():
+@pytest.mark.parametrize("flag", ["--speculative-config.num_speculative_tokens=2", "-sc.num_speculative_tokens=2"])
+def test_dotted_speculation_options_are_passed_through(flag):
     arguments = [*MODEL_ARGUMENTS, "--speculative-config", json.dumps(MTP_CONFIG),
-                 "--speculative-config.num_speculative_tokens=2"]
+                 flag]
     assert serving_command(arguments, B300_CAPABILITY) == [
         *BASE_COMMAND, *arguments, "--attention-backend", "TRITON_FLASHINFER"
     ]

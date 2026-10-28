@@ -19,7 +19,7 @@ SERVING_COMMAND = ("/opt/tinfoil/inference-sidecar", "vllm", "serve")
 def serving_command(arguments, capability):
     arguments = list(arguments)
     flags = {argument.split("=", 1)[0].replace("_", "-")
-             for argument in arguments if argument.startswith("--")}
+             for argument in arguments if argument.startswith("-")}
     parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
     parser.add_argument("--attention-config", "--attention_config", "-ac", type=json.loads)
     parser.add_argument("--speculative-config", "--speculative_config", "-sc", type=json.loads)
@@ -28,6 +28,7 @@ def serving_command(arguments, capability):
     attention = options.attention_config
     if (ATTENTION_BACKEND_FLAG not in flags
             and "--attention-config.backend" not in flags
+            and "-ac.backend" not in flags
             and not (isinstance(attention, dict) and "backend" in attention)):
         if capability == B300_CAPABILITY:
             arguments.extend([ATTENTION_BACKEND_FLAG, B300_ATTENTION_BACKEND])
@@ -39,7 +40,7 @@ def serving_command(arguments, capability):
             and "num_speculative_tokens" not in config
             and "num-speculative-tokens" not in config
             and options.spec_tokens is None
-            and not any(flag.startswith("--speculative-config.") for flag in flags)):
+            and not any(flag.startswith(("--speculative-config.", "-sc.")) for flag in flags)):
         count = B300_SPECULATIVE_TOKENS if capability == B300_CAPABILITY else DEFAULT_SPECULATIVE_TOKENS
         arguments.extend([SPECULATIVE_TOKENS_FLAG, str(count)])
     return [*SERVING_COMMAND, *arguments]
