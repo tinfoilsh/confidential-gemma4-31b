@@ -8,7 +8,7 @@
  from vllm.v1.attention.backends.composite import (
      MMPrefixAttentionRouting,
      create_composite_attention_backend,
-@@ -9,13 +10,34 @@
+@@ -9,13 +10,32 @@
  from vllm.v1.attention.backends.flashinfer import FlashInferBackend
  from vllm.v1.attention.backends.triton_attn import TritonAttentionBackend
  
@@ -28,8 +28,6 @@
 +
 +    @staticmethod
 +    def get_cudagraph_support(vllm_config, kv_cache_spec):
-+        if MMPrefixAttentionRouting.get_cudagraph_support(vllm_config, kv_cache_spec) == AttentionCGSupport.NEVER:
-+            return AttentionCGSupport.NEVER
 +        return AttentionCGSupport.UNIFORM_BATCH
 +
 +

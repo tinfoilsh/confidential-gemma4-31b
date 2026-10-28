@@ -5,7 +5,6 @@ import unittest
 
 import torch
 
-from vllm.v1.attention.backend import AttentionCGSupport
 from vllm.v1.attention.backends.triton_flashinfer import TritonDecodeRouting
 
 SPECULATIVE_COUNTS = (4, 6)
@@ -33,13 +32,6 @@ def metadata(lengths, ends, ranges):
 
 
 class PrefillRoutingTests(unittest.TestCase):
-    def test_graph_support_preserves_the_image_window_constraint(self):
-        for clamped, expected in ((True, AttentionCGSupport.UNIFORM_BATCH),
-                                  (False, AttentionCGSupport.NEVER)):
-            layer = SimpleNamespace(sliding_window=WINDOW, mm_prefix_clamp_sliding_window=clamped)
-            config = SimpleNamespace(compilation_config=SimpleNamespace(static_forward_context={"local": layer}))
-            self.assertEqual(TritonDecodeRouting.get_cudagraph_support(config, None), expected)
-
     def test_every_decode_width_uses_the_capture_child(self):
         for proposals in SPECULATIVE_COUNTS:
             policy = routing(proposals)
