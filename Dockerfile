@@ -58,4 +58,4 @@ ENTRYPOINT ["python3", "/opt/tinfoil/serve.py"]
 LABEL org.opencontainers.image.source="https://github.com/tinfoilsh/confidential-gemma4-31b" \
       org.opencontainers.image.revision="${SOURCE_REVISION}" \
       com.tinfoil.vllm.runtime-revision="db9527a46873454610df6dbedf79a36d6bf1a7f6" \
-      com.tinfoil.vllm.variant="cc-mrv2-fa4-mtp4-v0.31.0"
+      com.tinfoil.vllm.variant="cc-mrv2-mtp-v0.31.0"
