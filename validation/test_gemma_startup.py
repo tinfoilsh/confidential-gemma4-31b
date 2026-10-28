@@ -39,6 +39,26 @@ def test_explicit_backend_is_preserved(capability, backend):
     assert serving_command(arguments, capability) == [*BASE_COMMAND, *arguments]
 
 
+@pytest.mark.parametrize("capability", [HOPPER_CAPABILITY, B200_CAPABILITY, B300_CAPABILITY])
+@pytest.mark.parametrize("option", [
+    ["--attention-config", '{"backend":"TRITON_ATTN"}'],
+    ["--attention_config", '{"backend":"TRITON_ATTN"}'],
+    ["--attention-config={\"backend\":null}"],
+    ["-ac", '{"backend":"TRITON_ATTN"}'],
+    ["--attention-config.backend=TRITON_ATTN"],
+])
+def test_explicit_attention_configuration_is_preserved(capability, option):
+    arguments = [*MODEL_ARGUMENTS, *option]
+    assert serving_command(arguments, capability) == [*BASE_COMMAND, *arguments]
+
+
+def test_other_attention_options_keep_the_gpu_default():
+    arguments = [*MODEL_ARGUMENTS, "--attention-config", '{"flash_attn_version":4}']
+    assert serving_command(arguments, HOPPER_CAPABILITY) == [
+        *BASE_COMMAND, *arguments, "--attention-backend", "FLASH_ATTN"
+    ]
+
+
 @pytest.mark.parametrize("capability,count,backend", [
     (HOPPER_CAPABILITY, "4", ["--attention-backend", "FLASH_ATTN"]),
     (B200_CAPABILITY, "4", []),

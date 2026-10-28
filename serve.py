@@ -20,16 +20,20 @@ def serving_command(arguments, capability):
     arguments = list(arguments)
     flags = {argument.split("=", 1)[0].replace("_", "-")
              for argument in arguments if argument.startswith("--")}
-    if ATTENTION_BACKEND_FLAG not in flags:
+    parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    parser.add_argument("--attention-config", "--attention_config", "-ac", type=json.loads)
+    parser.add_argument("--speculative-config", "--speculative_config", "-sc", type=json.loads)
+    parser.add_argument(SPECULATIVE_TOKENS_FLAG, "--spec_tokens")
+    options, _ = parser.parse_known_args(arguments)
+    attention = options.attention_config
+    if (ATTENTION_BACKEND_FLAG not in flags
+            and "--attention-config.backend" not in flags
+            and not (isinstance(attention, dict) and "backend" in attention)):
         if capability == B300_CAPABILITY:
             arguments.extend([ATTENTION_BACKEND_FLAG, B300_ATTENTION_BACKEND])
         elif capability[0] != BLACKWELL_CAPABILITY_MAJOR:
             arguments.extend([ATTENTION_BACKEND_FLAG, DEFAULT_ATTENTION_BACKEND])
 
-    parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
-    parser.add_argument("--speculative-config", "--speculative_config", "-sc", type=json.loads)
-    parser.add_argument(SPECULATIVE_TOKENS_FLAG, "--spec_tokens")
-    options, _ = parser.parse_known_args(arguments)
     config = options.speculative_config
     if (isinstance(config, dict) and config.get("method") == "mtp"
             and "num_speculative_tokens" not in config
