@@ -1,5 +1,5 @@
 cvm-version: 0.14.17
-cpus: 16
+cpus: 12
 memory: 65536
 gpus: 1
 
